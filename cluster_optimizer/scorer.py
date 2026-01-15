@@ -246,6 +246,10 @@ def make_scorer(
     return cls(score_func, sign, kwargs)
 
 
+_davies_bouldin_scorer = make_scorer(
+    metrics.davies_bouldin_score, greater_is_better=False, ground_truth=False
+)
+
 SCORERS = {
     "silhouette_score": make_scorer(metrics.silhouette_score, ground_truth=False),
     "silhouette_score_euclidean": make_scorer(
@@ -254,9 +258,10 @@ SCORERS = {
     "silhouette_score_cosine": make_scorer(
         metrics.silhouette_score, ground_truth=False, metric="cosine"
     ),
-    "davies_bouldin_score": make_scorer(
-        metrics.davies_bouldin_score, greater_is_better=False, ground_truth=False
-    ),
+    # Preferred names (sklearn convention: neg_ prefix for lower-is-better)
+    "neg_davies_bouldin_score": _davies_bouldin_scorer,
+    # Deprecated aliases (kept for backwards compatibility)
+    "davies_bouldin_score": _davies_bouldin_scorer,
     "calinski_harabasz_score": make_scorer(
         metrics.calinski_harabasz_score, ground_truth=False
     ),

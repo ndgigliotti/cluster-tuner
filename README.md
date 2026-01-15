@@ -18,7 +18,51 @@ Since Scikit-Learn's `GridSearchCV` uses cross-validation, and is designed to op
 
 The `ClusterOptimizer` class is a hyperparameter search tool for optimizing clustering algorithms. It simply fits one model per hyperparameter combination and selects the best. It's a spin-off of `GridSearchCV`, and the implementation is derived from Scikit-Learn. The only difference is that it doesn't use cross-validation and is designed to work with special clustering scorers. It's not always necessary to provide a target variable, since clustering metrics such as silhouette, Calinski-Harabasz, and Davies-Bouldin are designed for unsupervised clustering.
 
-The interface is largely the same as `GridSearchCV`. One minor difference is that the search results are stored in the `results_` attribute, rather than `cv_results_`.
+The interface is largely the same as `GridSearchCV`. Results are stored in the `results_` attribute (`cv_results_` also works as an alias for compatibility).
+
+### Basic Usage
+
+```python
+from sklearn.cluster import DBSCAN
+from cluster_optimizer import ClusterOptimizer
+
+optimizer = ClusterOptimizer(
+    DBSCAN(),
+    param_grid={'eps': [0.3, 0.5, 0.7], 'min_samples': [5, 10]},
+    scoring='silhouette',
+)
+optimizer.fit(X)
+
+print(optimizer.best_params_)
+print(optimizer.best_score_)
+labels = optimizer.labels_
+```
+
+### Key Parameters
+
+- **`max_noise`** (default=0.1): Maximum allowed ratio of noise points (label=-1). Fits exceeding this threshold receive `error_score` instead.
+- **`min_cluster_size`** (default=3): Minimum allowed size for the smallest cluster. Fits with smaller clusters receive `error_score` instead.
+
+These parameters help filter out degenerate clustering solutions where most points are noise or clusters are too small to be meaningful.
+
+### Multi-Metric Scoring
+
+You can evaluate multiple metrics simultaneously using a list, tuple, or dict:
+
+```python
+optimizer = ClusterOptimizer(
+    DBSCAN(),
+    param_grid={'eps': [0.3, 0.5, 0.7]},
+    scoring=['silhouette', 'calinski_harabasz', 'neg_davies_bouldin'],
+    refit='silhouette',  # Required: which metric to use for selecting best
+)
+optimizer.fit(X)
+
+# Results include all metrics
+print(optimizer.results_['silhouette'])
+print(optimizer.results_['calinski_harabasz'])
+print(optimizer.results_['neg_davies_bouldin'])
+```
 
 ## Transductive Clustering Scorers
 
@@ -27,22 +71,32 @@ You can use `ClusterOptimizer` by passing the string name of a Scikit-Learn clus
 
 ### Recognized Scorer Names
 
-Note that the '_score' suffix is always optional.
+Note that the `_score` suffix is always optional (e.g., `'silhouette'` and `'silhouette_score'` both work).
 
-- 'silhouette_score'
-- 'silhouette_score_euclidean'
-- 'silhouette_score_cosine'
-- 'davies_bouldin_score'
-- 'calinski_harabasz_score'
-- 'mutual_info_score'
-- 'normalized_mutual_info_score'
-- 'adjusted_mutual_info_score'
-- 'rand_score'
-- 'adjusted_rand_score'
-- 'completeness_score'
-- 'fowlkes_mallows_score'
-- 'homogeneity_score'
-- 'v_measure_score'
+**Unsupervised metrics** (no ground truth required):
+- `'silhouette'` / `'silhouette_score'`
+- `'silhouette_euclidean'` / `'silhouette_score_euclidean'`
+- `'silhouette_cosine'` / `'silhouette_score_cosine'`
+- `'neg_davies_bouldin'` / `'neg_davies_bouldin_score'`
+- `'calinski_harabasz'` / `'calinski_harabasz_score'`
+
+**Supervised metrics** (require ground truth labels `y`):
+- `'mutual_info'` / `'mutual_info_score'`
+- `'normalized_mutual_info'` / `'normalized_mutual_info_score'`
+- `'adjusted_mutual_info'` / `'adjusted_mutual_info_score'`
+- `'rand'` / `'rand_score'`
+- `'adjusted_rand'` / `'adjusted_rand_score'`
+- `'completeness'` / `'completeness_score'`
+- `'fowlkes_mallows'` / `'fowlkes_mallows_score'`
+- `'homogeneity'` / `'homogeneity_score'`
+- `'v_measure'` / `'v_measure_score'`
+
+#### Naming Convention
+
+Following sklearn's convention, metrics where **lower is better** use a `neg_` prefix. The score is negated internally so that higher values always indicate better clustering. This applies to:
+- `'neg_davies_bouldin'` — Davies-Bouldin index (lower raw values = better separation)
+
+The old name `'davies_bouldin'` still works for backwards compatibility but `'neg_davies_bouldin'` is preferred.
 
 ## Caveats
 
@@ -56,7 +110,7 @@ It's important to consider your dataset and goals before comparing clustering al
 - [x] Develop alternative to `BaseSearchCV`.
 - [x] Add multi-metric compatibility.
 - [x] Remove noise "cluster" and impose noise limit.
-- [ ] Update docstrings taken from Scikit-Learn.
+- [x] Update docstrings taken from Scikit-Learn.
 - [ ] Add more search types (e.g. randomized).
 
 ## Credits

@@ -35,7 +35,14 @@ from cluster_optimizer.scorer import (
 
 # Type aliases
 ParamGrid = dict[str, Sequence[Any]] | list[dict[str, Sequence[Any]]]
-ScorerType = Callable[..., float] | dict[str, Callable[..., float]] | str | None
+ScorerType = (
+    Callable[..., float]
+    | dict[str, Callable[..., float]]
+    | list[str]
+    | tuple[str, ...]
+    | str
+    | None
+)
 ErrorScoreType = Literal["raise"] | float
 
 
@@ -689,6 +696,11 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         self._check_is_fitted("classes_")
         return self.best_estimator_.classes_
 
+    @property
+    def cv_results_(self) -> dict[str, Any]:
+        """Alias for results_ for GridSearchCV API compatibility."""
+        return self.results_
+
     def _run_search(
         self,
         evaluate_candidates: Callable[[Sequence[dict[str, Any]]], dict[str, Any]],
@@ -930,6 +942,7 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         # Store the only scorer not as a dict for single metric evaluation
         self.scorer_ = scorers
 
+        self.n_splits_ = 1
         self.results_ = results
 
         return self
@@ -1067,14 +1080,14 @@ class ClusterOptimizer(BaseSearch):
 
         Where there are considerations other than maximum score in
         choosing a best estimator, ``refit`` can be set to a function which
-        returns the selected ``best_index_`` given ``cv_results_``. In that
+        returns the selected ``best_index_`` given ``results_``. In that
         case, the ``best_estimator_`` and ``best_params_`` will be set
         according to the returned ``best_index_`` while the ``best_score_``
         attribute will not be available.
 
         The refitted estimator is made available at the ``best_estimator_``
         attribute and permits using ``predict`` directly on this
-        ``GridSearchCV`` instance.
+        ``ClusterOptimizer`` instance.
 
     verbose : int
         Controls the verbosity: the higher, the more messages.
@@ -1113,30 +1126,28 @@ class ClusterOptimizer(BaseSearch):
         See ``refit`` parameter for more information on allowed values.
 
     best_score_ : float
-        Mean cross-validated score of the best_estimator
+        Score of the best_estimator on the full dataset.
 
         This attribute is not available if ``refit`` is a function.
 
     best_params_ : dict
-        Parameter setting that gave the best results on the hold out data.
+        Parameter setting that gave the best results.
 
     best_index_ : int
-        The index (of the ``cv_results_`` arrays) which corresponds to the best
+        The index (of the ``results_`` arrays) which corresponds to the best
         candidate parameter setting.
 
-        The dict at ``search.cv_results_['params'][search.best_index_]`` gives
+        The dict at ``search.results_['params'][search.best_index_]`` gives
         the parameter setting for the best model, that gives the highest
-        mean score (``search.best_score_``).
+        score (``search.best_score_``).
 
     scorer_ : function or a dict
-        Scorer function used on the held out data to choose the best
-        parameters for the model.
+        Scorer function used to evaluate clustering quality and choose
+        the best parameters.
 
     n_splits_ : int
-        The number of cross-validation splits (folds/iterations). Always
-        1, since cross-validation is performed in name only. The one "split"
-        is actually not a split at all, since the full training dataset is passed
-        to the scorer.
+        Always 1. Provided for API compatibility with GridSearchCV.
+        No cross-validation is performed; each fit uses the full dataset.
 
     refit_time_ : float
         Seconds used for refitting the best model on the whole dataset.
@@ -1148,8 +1159,8 @@ class ClusterOptimizer(BaseSearch):
 
     Notes
     -----
-    The parameters selected are those that maximize the score of the left out
-    data, unless an explicit score is passed in which case it is used instead.
+    The parameters selected are those that maximize the clustering score
+    on the full dataset.
 
     If `n_jobs` was set to a value higher than one, the data is copied for each
     point in the grid (and not `n_jobs` times). This is done for efficiency
