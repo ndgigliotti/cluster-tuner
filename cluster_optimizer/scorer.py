@@ -1,13 +1,32 @@
+from __future__ import annotations
+
+from collections.abc import Callable, Iterable
 from types import MappingProxyType
-from typing import Iterable
+from typing import Any
+
 import numpy as np
+from numpy.typing import ArrayLike, NDArray
 from sklearn import metrics, preprocessing as pp
-from sklearn.metrics._scorer import _BaseScorer, _passthrough_scorer
+from sklearn.base import BaseEstimator
+from sklearn.metrics._scorer import _BaseScorer
+
+
 from sklearn.pipeline import Pipeline
 from sklearn.utils.validation import check_consistent_length, check_is_fitted
 
 
-def _get_labels(estimator):
+def _passthrough_scorer(
+    estimator: BaseEstimator,
+    X: ArrayLike,
+    y: ArrayLike | None = None,
+) -> float:
+    """Call estimator.score directly (passthrough scorer)."""
+    if y is None:
+        return estimator.score(X)
+    return estimator.score(X, y)
+
+
+def _get_labels(estimator: BaseEstimator | Pipeline) -> NDArray[np.intp]:
     """Gets the cluster labels from an estimator or pipeline."""
     if isinstance(estimator, Pipeline):
         check_is_fitted(estimator._final_estimator, ["labels_"])
@@ -18,33 +37,46 @@ def _get_labels(estimator):
     return np.array(labels)
 
 
-def _noise_ratio(labels, noise_label=-1):
+def _noise_ratio(labels: ArrayLike, noise_label: int = -1) -> float:
+    """Calculate the ratio of noise points in labels."""
     labels = np.asarray(labels)
-    return (labels == noise_label).mean()
+    return float((labels == noise_label).mean())
 
 
-def _smallest_clust_size(labels, noise_label=-1):
+def _smallest_clust_size(labels: ArrayLike, noise_label: int = -1) -> int:
+    """Find the size of the smallest non-noise cluster."""
     labels = pp.LabelEncoder().fit_transform(labels[labels != noise_label])
     sizes = np.bincount(labels)
     if sizes.size == 0:
         smallest_clust_size = -1
     else:
-        smallest_clust_size = sizes.min()
+        smallest_clust_size = int(sizes.min())
     return smallest_clust_size
 
 
-def _remove_noise_cluster(*arrays, labels, noise_label=-1):
+def _remove_noise_cluster(
+    *arrays: ArrayLike,
+    labels: ArrayLike,
+    noise_label: int = -1,
+) -> tuple[NDArray[Any], ...]:
     """Removes the noise cluster found in `labels` (if any) from all `arrays`."""
     is_noise = labels == noise_label
-    arrays = list(arrays)
-    for i, arr in enumerate(arrays):
-        arrays[i] = arr[~is_noise].copy()
-    check_consistent_length(*arrays)
-    return tuple(arrays)
+    result: list[NDArray[Any]] = []
+    for arr in arrays:
+        result.append(arr[~is_noise].copy())
+    check_consistent_length(*result)
+    return tuple(result)
 
 
 class _LabelScorerSupervised(_BaseScorer):
-    def _score(self, estimator, X, labels_true):
+    """Scorer for clustering metrics that require ground truth labels."""
+
+    def _score(
+        self,
+        estimator: BaseEstimator,
+        X: ArrayLike,
+        labels_true: ArrayLike,
+    ) -> float:
         """Evaluate estimator labels relative to y_true.
 
         Parameters
@@ -54,7 +86,7 @@ class _LabelScorerSupervised(_BaseScorer):
 
         X : {array-like, sparse matrix}
             Does nothing, since estimator should already have `labels_`.
-            Here for API compatability.
+            Here for API compatibility.
 
         labels_true : array-like
             Ground truth target values for cluster labels.
@@ -64,12 +96,16 @@ class _LabelScorerSupervised(_BaseScorer):
         score : float
             Score function applied to cluster labels.
         """
-
         labels = _get_labels(estimator)
         labels_true, labels = _remove_noise_cluster(labels_true, labels, labels=labels)
         return self._sign * self._score_func(labels_true, labels, **self._kwargs)
 
-    def __call__(self, estimator, X, labels_true):
+    def __call__(
+        self,
+        estimator: BaseEstimator,
+        X: ArrayLike,
+        labels_true: ArrayLike,
+    ) -> float:
         """Evaluate estimator labels relative to y_true.
 
         Parameters
@@ -79,7 +115,7 @@ class _LabelScorerSupervised(_BaseScorer):
 
         X : {array-like, sparse matrix}
             Does nothing, since estimator should already have `labels_`.
-            Here for API compatability.
+            Here for API compatibility.
 
         labels_true : array-like
             Ground truth target values for cluster labels.
@@ -97,7 +133,14 @@ class _LabelScorerSupervised(_BaseScorer):
 
 
 class _LabelScorerUnsupervised(_BaseScorer):
-    def _score(self, estimator, X, labels_true=None):
+    """Scorer for clustering metrics that don't require ground truth."""
+
+    def _score(
+        self,
+        estimator: BaseEstimator,
+        X: ArrayLike,
+        labels_true: ArrayLike | None = None,
+    ) -> float:
         """Evaluate cluster labels on X.
 
         Parameters
@@ -109,7 +152,7 @@ class _LabelScorerUnsupervised(_BaseScorer):
             Data that will be used to evaluate cluster labels.
 
         labels_true: array-like
-            Does nothing. Here for API compatability.
+            Does nothing. Here for API compatibility.
 
         Returns
         -------
@@ -122,7 +165,12 @@ class _LabelScorerUnsupervised(_BaseScorer):
         X, labels = _remove_noise_cluster(X, labels, labels=labels)
         return self._sign * self._score_func(X, labels, **self._kwargs)
 
-    def __call__(self, estimator, X, labels_true=None):
+    def __call__(
+        self,
+        estimator: BaseEstimator,
+        X: ArrayLike,
+        labels_true: ArrayLike | None = None,
+    ) -> float:
         """Evaluate predicted target values for X relative to y_true.
 
         Parameters
@@ -134,7 +182,7 @@ class _LabelScorerUnsupervised(_BaseScorer):
             Data that will be used to evaluate cluster labels.
 
         labels_true: array-like
-            Does nothing. Here for API compatability.
+            Does nothing. Here for API compatibility.
 
         Returns
         -------
@@ -148,12 +196,12 @@ class _LabelScorerUnsupervised(_BaseScorer):
 
 
 def make_scorer(
-    score_func,
+    score_func: Callable[..., float],
     *,
-    ground_truth=True,
-    greater_is_better=True,
-    **kwargs,
-):
+    ground_truth: bool = True,
+    greater_is_better: bool = True,
+    **kwargs: Any,
+) -> _LabelScorerSupervised | _LabelScorerUnsupervised:
     """Make a clustering scorer from a performance metric or loss function.
 
     This factory function wraps scoring functions for use in
@@ -226,7 +274,9 @@ SCORERS.update({k.replace("_score", ""): v for k, v in SCORERS.items()})
 SCORERS = MappingProxyType(SCORERS)
 
 
-def get_scorer(scoring):
+def get_scorer(
+    scoring: str | Callable[..., float],
+) -> Callable[..., float]:
     """Get a clustering scorer from string.
 
     Parameters
@@ -253,7 +303,10 @@ def get_scorer(scoring):
     return scorer
 
 
-def check_scoring(estimator, scoring=None):
+def check_scoring(
+    estimator: BaseEstimator,
+    scoring: str | Callable[..., float] | None = None,
+) -> Callable[..., float]:
     """Determine scorer from user options.
 
     A TypeError will be thrown if the estimator cannot be scored.
@@ -276,8 +329,8 @@ def check_scoring(estimator, scoring=None):
     """
     if not hasattr(estimator, "fit"):
         raise TypeError(
-            "estimator should be an estimator implementing "
-            "'fit' method, %r was passed" % estimator
+            f"estimator should be an estimator implementing "
+            f"'fit' method, {estimator!r} was passed"
         )
     if isinstance(scoring, str):
         return get_scorer(scoring)
@@ -291,11 +344,10 @@ def check_scoring(estimator, scoring=None):
             and not module.startswith("sklearn.metrics.tests.")
         ):
             raise ValueError(
-                "scoring value %r looks like it is a metric "
-                "function rather than a scorer. A scorer should "
-                "require an estimator as its first parameter. "
-                "Please use `make_scorer` to convert a metric "
-                "to a scorer." % scoring
+                f"scoring value {scoring!r} looks like it is a metric "
+                f"function rather than a scorer. A scorer should "
+                f"require an estimator as its first parameter. "
+                f"Please use `make_scorer` to convert a metric to a scorer."
             )
         return get_scorer(scoring)
     elif scoring is None:
@@ -303,23 +355,26 @@ def check_scoring(estimator, scoring=None):
             return _passthrough_scorer
         else:
             raise TypeError(
-                "If no scoring is specified, the estimator passed should "
-                "have a 'score' method. The estimator %r does not." % estimator
+                f"If no scoring is specified, the estimator passed should "
+                f"have a 'score' method. The estimator {estimator!r} does not."
             )
     elif isinstance(scoring, Iterable):
         raise ValueError(
-            "For evaluating multiple scores, use "
-            "sklearn.model_selection.cross_validate instead. "
-            "{0} was passed.".format(scoring)
+            f"For evaluating multiple scores, use "
+            f"sklearn.model_selection.cross_validate instead. "
+            f"{scoring} was passed."
         )
     else:
         raise ValueError(
-            "scoring value should either be a callable, string or"
-            " None. %r was passed" % scoring
+            f"scoring value should either be a callable, string or "
+            f"None. {scoring!r} was passed"
         )
 
 
-def check_multimetric_scoring(estimator, scoring):
+def check_multimetric_scoring(
+    estimator: BaseEstimator,
+    scoring: list[str] | tuple[str, ...] | set[str] | dict[str, Callable[..., float]],
+) -> dict[str, Callable[..., float]]:
     """Check the scoring parameter in cases when multiple metrics are allowed.
 
     Parameters

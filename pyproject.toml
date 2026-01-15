@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cluster_optimizer"
+version = "0.1.0"
+description = "A GridSearchCV-like hyperparameter optimizer for clustering (no cross-validation)."
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "nick_gigliotti", email = "ndgigliotti@gmail.com"}
+]
+requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+keywords = ["clustering", "hyperparameter", "optimization", "scikit-learn", "machine-learning"]
+dependencies = [
+    "scikit-learn>=1.6",
+    "numpy>=1.23",
+    "scipy>=1.9",
+    "joblib>=1.2",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0",
+    "pandas>=2.0",
+]
+dev = [
+    "pytest>=7.0",
+    "pandas>=2.0",
+    "mypy>=1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/ndgigliotti/cluster-optimizer"
+Repository = "https://github.com/ndgigliotti/cluster-optimizer"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cluster_optimizer*"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests.py"]

@@ -1,30 +1,29 @@
+from __future__ import annotations
+
 import numbers
-import operator
 import time
 import warnings
 from abc import ABCMeta, abstractmethod
 from collections import defaultdict
+from collections.abc import Callable, Sequence
 from contextlib import suppress
 from functools import partial
 from traceback import format_exc
+from typing import Any, Literal
 
 import joblib
 import numpy as np
+from joblib import delayed
 from numpy.ma import MaskedArray
+from numpy.typing import ArrayLike, NDArray
 from scipy.stats import rankdata
 from sklearn.base import BaseEstimator, MetaEstimatorMixin, clone
 from sklearn.exceptions import FitFailedWarning, NotFittedError
-from sklearn.model_selection._search import ParameterGrid, _check_param_grid
-from sklearn.model_selection._validation import (
-    _aggregate_score_dicts,
-    _insert_error_scores,
-    _normalize_score_results,
-)
+from sklearn.model_selection import ParameterGrid
 from sklearn.pipeline import Pipeline
-from sklearn.utils._tags import _safe_tags
-from sklearn.utils.fixes import delayed
-from sklearn.utils.metaestimators import if_delegate_has_method
-from sklearn.utils.validation import _check_fit_params, check_is_fitted
+from sklearn.utils.metaestimators import available_if
+from sklearn.utils.validation import check_is_fitted
+
 
 from cluster_optimizer.scorer import (
     _get_labels,
@@ -34,10 +33,137 @@ from cluster_optimizer.scorer import (
     check_scoring,
 )
 
+# Type aliases
+ParamGrid = dict[str, Sequence[Any]] | list[dict[str, Sequence[Any]]]
+ScorerType = Callable[..., float] | dict[str, Callable[..., float]] | str | None
+ErrorScoreType = Literal["raise"] | float
+
+
+def _check_fit_params(
+    X: ArrayLike,
+    fit_params: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Validate and prepare fit parameters.
+
+    Parameters
+    ----------
+    X : array-like
+        The input data (used to validate sample-aligned parameters).
+    fit_params : dict or None
+        Parameters to pass to fit.
+
+    Returns
+    -------
+    fit_params : dict
+        Validated fit parameters.
+    """
+    if fit_params is None:
+        return {}
+    return fit_params
+
+
+def _check_param_grid(param_grid: dict | list[dict]) -> None:
+    """Validate parameter grid format.
+
+    Parameters
+    ----------
+    param_grid : dict or list of dicts
+        Each dict maps parameter names to lists of values.
+
+    Raises
+    ------
+    ValueError
+        If param_grid is empty or has invalid structure.
+    TypeError
+        If parameter values are not iterable (excluding strings).
+    """
+    if hasattr(param_grid, "items"):
+        param_grid = [param_grid]
+
+    for p in param_grid:
+        for name, v in p.items():
+            if isinstance(v, np.ndarray) and v.ndim > 1:
+                raise ValueError(
+                    f"Parameter array for {name!r} should be one-dimensional, "
+                    f"got array with shape {v.shape}"
+                )
+            if isinstance(v, str) or not hasattr(v, "__iter__"):
+                raise TypeError(
+                    f"Parameter grid for parameter {name!r} needs to be a list "
+                    f"or a numpy array, but got {type(v).__name__!r} instead. "
+                    f"Single values should be wrapped in a list."
+                )
+            if len(v) == 0:
+                raise ValueError(
+                    f"Parameter grid for parameter {name!r} is empty. "
+                    f"Provide at least one value to search over."
+                )
+
+
+def _aggregate_score_dicts(
+    scores: list[dict[str, Any]],
+) -> dict[str, np.ndarray]:
+    """Aggregate a list of score dicts into a dict of arrays.
+
+    Transforms [{'a': 0.1, 'b': 0.2}, {'a': 0.3, 'b': 0.4}]
+    into {'a': array([0.1, 0.3]), 'b': array([0.2, 0.4])}
+    """
+    return {key: np.asarray([score[key] for score in scores]) for key in scores[0]}
+
+
+def _insert_error_scores(
+    results: list[dict[str, Any]],
+    error_score: float | int,
+) -> None:
+    """Insert error_score into results for failed fits (in-place)."""
+    for result in results:
+        if result.get("fit_failed", False):
+            scores = result.get("scores")
+            if isinstance(scores, dict):
+                result["scores"] = {name: error_score for name in scores}
+            else:
+                result["scores"] = error_score
+
+
+def _normalize_score_results(
+    scores: list[dict[str, float] | float],
+    scalar_score_key: str = "score",
+) -> dict[str, np.ndarray]:
+    """Normalize score results into dict of arrays.
+
+    If scores are dicts (multimetric), aggregate them.
+    If scores are scalars, wrap in dict with scalar_score_key.
+    """
+    if isinstance(scores[0], dict):
+        return _aggregate_score_dicts(scores)
+    else:
+        return {scalar_score_key: np.asarray(scores)}
+
+
+def _estimator_has(attr: str) -> Callable[[BaseSearch], bool]:
+    """Check if the fitted estimator has a specific attribute.
+
+    Used with available_if decorator to conditionally expose methods.
+    """
+
+    def check(self: BaseSearch) -> bool:
+        # Check best_estimator_ first (fitted), then estimator (unfitted)
+        if hasattr(self, "best_estimator_"):
+            return hasattr(self.best_estimator_, attr)
+        return hasattr(self.estimator, attr)
+
+    return check
+
 
 def _score(
-    estimator, X, y, scorer, error_score="raise", max_noise=0.1, min_cluster_size=3
-):
+    estimator: BaseEstimator,
+    X: ArrayLike,
+    y: ArrayLike | None,
+    scorer: Callable[..., float] | dict[str, Callable[..., float]],
+    error_score: ErrorScoreType = "raise",
+    max_noise: float = 0.1,
+    min_cluster_size: int = 3,
+) -> float | dict[str, float]:
     """Compute the score(s) of an estimator on a given data set.
 
     Will return a dict of floats if `scorer` is a dict, otherwise a single
@@ -90,15 +216,16 @@ def _score(
                     UserWarning,
                 )
 
-    error_msg = "scoring must return a number, got %s (%s) instead. (scorer=%s)"
-
     for name, score in scores.items():
         if hasattr(score, "item"):
             with suppress(ValueError):
                 # e.g. unwrap memmapped scalars
                 score = score.item()
         if not isinstance(score, numbers.Number):
-            raise ValueError(error_msg % (score, type(score), name))
+            raise ValueError(
+                f"scoring must return a number, got {score} ({type(score)}) "
+                f"instead. (scorer={name})"
+            )
         scores[name] = score
     if len(scores) == 1:
         scores = list(scores.values())[0]
@@ -106,26 +233,26 @@ def _score(
 
 
 def _fit_and_score(
-    estimator,
-    X,
-    y,
-    scorer,
-    verbose,
-    parameters,
-    fit_params,
-    return_parameters=False,
-    return_n_samples=False,
-    return_times=False,
-    return_estimator=False,
-    return_noise_ratios=False,
-    return_smallest_clust_sizes=False,
-    candidate_progress=None,
-    error_score=np.nan,
-    max_noise=0.1,
-    min_cluster_size=3,
-):
+    estimator: BaseEstimator,
+    X: ArrayLike,
+    y: ArrayLike | None,
+    scorer: Callable[..., float] | dict[str, Callable[..., float]],
+    verbose: int,
+    parameters: dict[str, Any] | None,
+    fit_params: dict[str, Any] | None,
+    return_parameters: bool = False,
+    return_n_samples: bool = False,
+    return_times: bool = False,
+    return_estimator: bool = False,
+    return_noise_ratios: bool = False,
+    return_smallest_clust_sizes: bool = False,
+    candidate_progress: tuple[int, int] | None = None,
+    error_score: ErrorScoreType = np.nan,
+    max_noise: float = 0.1,
+    min_cluster_size: int = 3,
+) -> dict[str, Any]:
 
-    """Fit estimator and compute scores for a given dataset split.
+    """Fit estimator and compute scores for clustering.
 
     Parameters
     ----------
@@ -136,32 +263,16 @@ def _fit_and_score(
         The data to fit.
 
     y : array-like of shape (n_samples,) or (n_samples, n_outputs) or None
-        The target variable to try to predict in the case of
-        supervised learning.
+        The target variable (ground truth labels for supervised metrics);
+        None for unsupervised learning.
 
-    scorer : A single callable or dict mapping scorer name to the callable
-        If it is a single callable, the return value for ``train_scores`` and
-        ``test_scores`` is a single float.
-
-        For a dict, it should be one mapping the scorer name to the scorer
-        callable object / function.
-
-        The callable object / fn should have signature
-        ``scorer(estimator, X, y)``.
-
-    train : array-like of shape (n_train_samples,)
-        Indices of training samples.
-
-    test : array-like of shape (n_test_samples,)
-        Indices of test samples.
+    scorer : callable or dict mapping scorer name to callable
+        If it is a single callable, the return value for ``scores`` is a single
+        float. For a dict, it should map the scorer name to the scorer callable.
+        The callable should have signature ``scorer(estimator, X, y)``.
 
     verbose : int
         The verbosity level.
-
-    error_score : 'raise' or numeric, default=np.nan
-        Value to assign to the score if an error occurs in estimator fitting.
-        If set to 'raise', the error is raised.
-        If a numeric value is given, FitFailedWarning is raised.
 
     parameters : dict or None
         Parameters to be set on the estimator.
@@ -169,21 +280,11 @@ def _fit_and_score(
     fit_params : dict or None
         Parameters that will be passed to ``estimator.fit``.
 
-    return_train_score : bool, default=False
-        Compute and return score on training set.
-
     return_parameters : bool, default=False
-        Return parameters that has been used for the estimator.
+        Return parameters that have been used for the estimator.
 
-    split_progress : {list, tuple} of int, default=None
-        A list or tuple of format (<current_split_id>, <total_num_of_splits>).
-
-    candidate_progress : {list, tuple} of int, default=None
-        A list or tuple of format
-        (<current_candidate_id>, <total_number_of_candidates>).
-
-    return_n_test_samples : bool, default=False
-        Whether to return the ``n_test_samples``.
+    return_n_samples : bool, default=False
+        Whether to return the number of samples.
 
     return_times : bool, default=False
         Whether to return the fit/score times.
@@ -191,26 +292,48 @@ def _fit_and_score(
     return_estimator : bool, default=False
         Whether to return the fitted estimator.
 
+    return_noise_ratios : bool, default=False
+        Whether to return the noise ratio of the clustering.
+
+    return_smallest_clust_sizes : bool, default=False
+        Whether to return the size of the smallest cluster.
+
+    candidate_progress : tuple of int, default=None
+        A tuple of format (current_candidate_id, total_number_of_candidates).
+
+    error_score : 'raise' or numeric, default=np.nan
+        Value to assign to the score if an error occurs in estimator fitting.
+        If set to 'raise', the error is raised.
+        If a numeric value is given, FitFailedWarning is raised.
+
+    max_noise : float, default=0.1
+        Maximum allowed noise ratio. If exceeded, error_score is used.
+
+    min_cluster_size : int, default=3
+        Minimum allowed cluster size. If smallest cluster is smaller,
+        error_score is used.
+
     Returns
     -------
     result : dict with the following attributes
-        train_scores : dict of scorer name -> float
-            Score on training set (for all the scorers),
-            returned only if `return_train_score` is `True`.
-        test_scores : dict of scorer name -> float
-            Score on testing set (for all the scorers).
-        n_test_samples : int
-            Number of test samples.
+        scores : dict of scorer name -> float or float
+            Score(s) on the data.
+        n_samples : int
+            Number of samples (if return_n_samples=True).
         fit_time : float
-            Time spent for fitting in seconds.
+            Time spent for fitting in seconds (if return_times=True).
         score_time : float
-            Time spent for scoring in seconds.
+            Time spent for scoring in seconds (if return_times=True).
         parameters : dict or None
-            The parameters that have been evaluated.
+            The parameters that have been evaluated (if return_parameters=True).
         estimator : estimator object
-            The fitted estimator.
+            The fitted estimator (if return_estimator=True).
+        noise_ratio : float
+            Ratio of noise points (if return_noise_ratios=True).
+        smallest_clust_size : int
+            Size of smallest cluster (if return_smallest_clust_sizes=True).
         fit_failed : bool
-            The estimator failed to fit.
+            Whether the estimator failed to fit.
     """
     if not isinstance(error_score, numbers.Number) and error_score != "raise":
         raise ValueError(
@@ -270,8 +393,8 @@ def _fit_and_score(
             else:
                 scores = error_score
             warnings.warn(
-                "Estimator fit failed. The score for these parameters"
-                " will be set to %f. Details: \n%s" % (error_score, format_exc()),
+                f"Estimator fit failed. The score for these parameters "
+                f"will be set to {error_score}. Details:\n{format_exc()}",
                 FitFailedWarning,
             )
         result["fit_failed"] = True
@@ -327,17 +450,17 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
     @abstractmethod
     def __init__(
         self,
-        estimator,
+        estimator: BaseEstimator,
         *,
-        scoring=None,
-        n_jobs=None,
-        refit=True,
-        verbose=0,
-        pre_dispatch="2*n_jobs",
-        error_score=np.nan,
-        max_noise=0.1,
-        min_cluster_size=3,
-    ):
+        scoring: ScorerType = None,
+        n_jobs: int | None = None,
+        refit: bool | str | Callable[[dict[str, Any]], int] = True,
+        verbose: int = 0,
+        pre_dispatch: int | str = "2*n_jobs",
+        error_score: ErrorScoreType = np.nan,
+        max_noise: float = 0.1,
+        min_cluster_size: int = 3,
+    ) -> None:
         self.scoring = scoring
         self.estimator = estimator
         self.n_jobs = n_jobs
@@ -349,19 +472,30 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         self.min_cluster_size = min_cluster_size
 
     @property
-    def _estimator_type(self):
-        return self.estimator._estimator_type
+    def _estimator_type(self) -> str:
+        # Check for direct attribute (sklearn < 1.8)
+        if hasattr(self.estimator, "_estimator_type"):
+            return self.estimator._estimator_type
+        # Check via tags (sklearn 1.8+)
+        if hasattr(self.estimator, "__sklearn_tags__"):
+            tags = self.estimator.__sklearn_tags__()
+            if hasattr(tags, "estimator_type"):
+                return tags.estimator_type
+        return "clusterer"  # Default for clustering estimators
 
-    def _more_tags(self):
-        # allows cross-validation to see 'precomputed' metrics
-        return {
-            "pairwise": _safe_tags(self.estimator, "pairwise"),
-            "_xfail_checks": {
-                "check_supervised_y_2d": "DataConversionWarning not caught"
-            },
-        }
+    def __sklearn_tags__(self):
+        """Return sklearn tags for the estimator."""
+        tags = super().__sklearn_tags__()
 
-    def score(self, X, y=None):
+        # Get pairwise tag from wrapped estimator
+        if hasattr(self.estimator, "__sklearn_tags__"):
+            estimator_tags = self.estimator.__sklearn_tags__()
+            if hasattr(estimator_tags, "input_tags"):
+                tags.input_tags.pairwise = estimator_tags.input_tags.pairwise
+
+        return tags
+
+    def score(self, X: ArrayLike, y: ArrayLike | None = None) -> float:
         """Returns the score on the given data, if the estimator has been refit.
 
         This uses the score defined by ``scoring`` where provided, and the
@@ -385,8 +519,8 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         self._check_is_fitted("score")
         if self.scorer_ is None:
             raise ValueError(
-                "No score function explicitly defined, "
-                "and the estimator doesn't provide one %s" % self.best_estimator_
+                f"No score function explicitly defined, "
+                f"and the estimator doesn't provide one {self.best_estimator_}"
             )
         if isinstance(self.scorer_, dict):
             if self.multimetric_:
@@ -401,8 +535,8 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
             score = score[self.refit]
         return score
 
-    @if_delegate_has_method(delegate=("best_estimator_", "estimator"))
-    def score_samples(self, X):
+    @available_if(_estimator_has("score_samples"))
+    def score_samples(self, X: ArrayLike) -> NDArray[Any]:
         """Call score_samples on the estimator with the best found parameters.
 
         Only available if ``refit=True`` and the underlying estimator supports
@@ -423,21 +557,20 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         self._check_is_fitted("score_samples")
         return self.best_estimator_.score_samples(X)
 
-    def _check_is_fitted(self, method_name):
+    def _check_is_fitted(self, method_name: str) -> None:
         if not self.refit:
             raise NotFittedError(
-                "This %s instance was initialized "
-                "with refit=False. %s is "
-                "available only after refitting on the best "
-                "parameters. You can refit an estimator "
-                "manually using the ``best_params_`` "
-                "attribute" % (type(self).__name__, method_name)
+                f"This {type(self).__name__} instance was initialized "
+                f"with refit=False. {method_name} is "
+                f"available only after refitting on the best "
+                f"parameters. You can refit an estimator "
+                f"manually using the ``best_params_`` attribute"
             )
         else:
             check_is_fitted(self)
 
-    @if_delegate_has_method(delegate=("best_estimator_", "estimator"))
-    def predict(self, X):
+    @available_if(_estimator_has("predict"))
+    def predict(self, X: ArrayLike) -> NDArray[Any]:
         """Call predict on the estimator with the best found parameters.
 
         Only available if ``refit=True`` and the underlying estimator supports
@@ -453,8 +586,8 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         self._check_is_fitted("predict")
         return self.best_estimator_.predict(X)
 
-    @if_delegate_has_method(delegate=("best_estimator_", "estimator"))
-    def predict_proba(self, X):
+    @available_if(_estimator_has("predict_proba"))
+    def predict_proba(self, X: ArrayLike) -> NDArray[Any]:
         """Call predict_proba on the estimator with the best found parameters.
 
         Only available if ``refit=True`` and the underlying estimator supports
@@ -470,8 +603,8 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         self._check_is_fitted("predict_proba")
         return self.best_estimator_.predict_proba(X)
 
-    @if_delegate_has_method(delegate=("best_estimator_", "estimator"))
-    def predict_log_proba(self, X):
+    @available_if(_estimator_has("predict_log_proba"))
+    def predict_log_proba(self, X: ArrayLike) -> NDArray[Any]:
         """Call predict_log_proba on the estimator with the best found parameters.
 
         Only available if ``refit=True`` and the underlying estimator supports
@@ -487,8 +620,8 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         self._check_is_fitted("predict_log_proba")
         return self.best_estimator_.predict_log_proba(X)
 
-    @if_delegate_has_method(delegate=("best_estimator_", "estimator"))
-    def decision_function(self, X):
+    @available_if(_estimator_has("decision_function"))
+    def decision_function(self, X: ArrayLike) -> NDArray[Any]:
         """Call decision_function on the estimator with the best found parameters.
 
         Only available if ``refit=True`` and the underlying estimator supports
@@ -504,8 +637,8 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         self._check_is_fitted("decision_function")
         return self.best_estimator_.decision_function(X)
 
-    @if_delegate_has_method(delegate=("best_estimator_", "estimator"))
-    def transform(self, X):
+    @available_if(_estimator_has("transform"))
+    def transform(self, X: ArrayLike) -> NDArray[Any]:
         """Call transform on the estimator with the best found parameters.
 
         Only available if the underlying estimator supports ``transform`` and
@@ -521,8 +654,8 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         self._check_is_fitted("transform")
         return self.best_estimator_.transform(X)
 
-    @if_delegate_has_method(delegate=("best_estimator_", "estimator"))
-    def inverse_transform(self, Xt):
+    @available_if(_estimator_has("inverse_transform"))
+    def inverse_transform(self, Xt: ArrayLike) -> NDArray[Any]:
         """Call inverse_transform on the estimator with the best found params.
 
         Only available if the underlying estimator implements
@@ -539,26 +672,27 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         return self.best_estimator_.inverse_transform(Xt)
 
     @property
-    def n_features_in_(self):
+    def n_features_in_(self) -> int:
         # For consistency with other estimators we raise a AttributeError so
         # that hasattr() fails if the search estimator isn't fitted.
         try:
             check_is_fitted(self)
         except NotFittedError as nfe:
             raise AttributeError(
-                "{} object has no n_features_in_ attribute.".format(
-                    self.__class__.__name__
-                )
+                f"{self.__class__.__name__} object has no n_features_in_ attribute."
             ) from nfe
 
         return self.best_estimator_.n_features_in_
 
     @property
-    def classes_(self):
+    def classes_(self) -> NDArray[Any]:
         self._check_is_fitted("classes_")
         return self.best_estimator_.classes_
 
-    def _run_search(self, evaluate_candidates):
+    def _run_search(
+        self,
+        evaluate_candidates: Callable[[Sequence[dict[str, Any]]], dict[str, Any]],
+    ) -> None:
         """Repeatedly calls `evaluate_candidates` to conduct a search.
 
         This method, implemented in sub-classes, makes it possible to
@@ -618,7 +752,10 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         """
         raise NotImplementedError("_run_search not implemented.")
 
-    def _check_refit_for_multimetric(self, scores):
+    def _check_refit_for_multimetric(
+        self,
+        scores: dict[str, Callable[..., float]],
+    ) -> None:
         """Check `refit` is compatible with `scores` is valid"""
         multimetric_refit_msg = (
             "For multi-metric scoring, the parameter refit must be set to a "
@@ -638,7 +775,12 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         ):
             raise ValueError(multimetric_refit_msg)
 
-    def fit(self, X, y=None, **fit_params):
+    def fit(
+        self,
+        X: ArrayLike,
+        y: ArrayLike | None = None,
+        **fit_params: Any,
+    ) -> BaseSearch:
         """Run fit with all sets of parameters.
 
         Parameters
@@ -721,7 +863,7 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
                         "No fits were performed. Were there no candidates?"
                     )
                 elif len(out) != n_candidates:
-                    raise ValueError(f"Received fewer results than candidates.")
+                    raise ValueError("Received fewer results than candidates.")
 
                 # For callable self.scoring, the return type is only know after
                 # calling. If the return type is a dictionary, the error scores
@@ -767,7 +909,7 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
                 if self.best_index_ < 0 or self.best_index_ >= len(results["params"]):
                     raise IndexError("best_index_ index out of range")
             else:
-                self.best_index_ = results["rank_%s" % refit_metric].argmin()
+                self.best_index_ = results[f"rank_{refit_metric}"].argmin()
                 self.best_score_ = results[refit_metric][self.best_index_]
             self.best_params_ = results["params"][self.best_index_]
 
@@ -792,13 +934,18 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
 
         return self
 
-    def _format_results(self, candidate_params, out, more_results=None):
+    def _format_results(
+        self,
+        candidate_params: list[dict[str, Any]],
+        out: list[dict[str, Any]],
+        more_results: dict[str, list[Any]] | None = None,
+    ) -> dict[str, Any]:
         n_candidates = len(candidate_params)
         out = _aggregate_score_dicts(out)
 
         results = dict(more_results or {})
 
-        def _store(key_name, array, rank=False):
+        def _store(key_name: str, array: ArrayLike, rank: bool = False) -> None:
             """A small helper to store the scores/times to the results_"""
             # When iterated first by splits, then by parameters
             # We want `array` to have `n_candidates` rows and `n_splits` cols.
@@ -813,7 +960,7 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
                 )
 
             if rank:
-                results["rank_%s" % key_name] = np.asarray(
+                results[f"rank_{key_name}"] = np.asarray(
                     rankdata(-array, method="min"), dtype=np.int32
                 )
 
@@ -837,9 +984,9 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         for cand_idx, params in enumerate(candidate_params):
             for name, value in params.items():
                 # An all masked empty array gets created for the key
-                # `"param_%s" % name` at the first occurrence of `name`.
+                # `f"param_{name}"` at the first occurrence of `name`.
                 # Setting the value at an index also unmasks that index
-                param_results["param_%s" % name][cand_idx] = value
+                param_results[f"param_{name}"][cand_idx] = value
 
         results.update(param_results)
         # Store a list of param dicts at the key 'params'
@@ -861,7 +1008,7 @@ class ClusterOptimizer(BaseSearch):
     """Exhaustive search over specified parameter values for a clustering estimator.
 
     ClusterOptimizer implements a `fit` and a `score` method. It attains the
-    `labels_` attribute after optimizing hyperparemeters if `refit=True`.
+    `labels_` attribute after optimizing hyperparameters if `refit=True`.
     It also implements "predict", "transform" and "inverse_transform"
     if they are implemented in the estimator used.
 
@@ -997,7 +1144,7 @@ class ClusterOptimizer(BaseSearch):
         This is present only if ``refit`` is not False.
 
     multimetric_ : bool
-        Whether or not the scorers compute several metrics. Currently not supported.
+        Whether or not the scorers compute several metrics.
 
     Notes
     -----
@@ -1019,22 +1166,22 @@ class ClusterOptimizer(BaseSearch):
 
     """
 
-    _required_parameters = ["estimator", "param_grid"]
+    _required_parameters: list[str] = ["estimator", "param_grid"]
 
     def __init__(
         self,
-        estimator,
-        param_grid,
+        estimator: BaseEstimator,
+        param_grid: ParamGrid,
         *,
-        scoring=None,
-        n_jobs=None,
-        refit=True,
-        verbose=0,
-        pre_dispatch="2*n_jobs",
-        error_score=np.nan,
-        max_noise=0.1,
-        min_cluster_size=3,
-    ):
+        scoring: ScorerType = None,
+        n_jobs: int | None = None,
+        refit: bool | str | Callable[[dict[str, Any]], int] = True,
+        verbose: int = 0,
+        pre_dispatch: int | str = "2*n_jobs",
+        error_score: ErrorScoreType = np.nan,
+        max_noise: float = 0.1,
+        min_cluster_size: int = 3,
+    ) -> None:
         super().__init__(
             estimator=estimator,
             scoring=scoring,
@@ -1049,11 +1196,14 @@ class ClusterOptimizer(BaseSearch):
         self.max_noise = max_noise
         self.min_cluster_size = min_cluster_size
 
-    def _run_search(self, evaluate_candidates):
+    def _run_search(
+        self,
+        evaluate_candidates: Callable[[Sequence[dict[str, Any]]], dict[str, Any]],
+    ) -> None:
         """Search all candidates in param_grid"""
         evaluate_candidates(ParameterGrid(self.param_grid))
 
     @property
-    def labels_(self):
+    def labels_(self) -> NDArray[np.intp]:
         check_is_fitted(self, "best_estimator_")
         return _get_labels(self.best_estimator_)
