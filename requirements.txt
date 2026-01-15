@@ -1,0 +1,9 @@
+# Core dependencies
+scikit-learn>=1.6
+numpy>=1.23
+scipy>=1.9
+joblib>=1.2
+
+# Test dependencies (optional)
+# pytest>=7.0
+# pandas>=2.0
