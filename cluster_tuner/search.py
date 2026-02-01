@@ -114,8 +114,18 @@ def _aggregate_score_dicts(
 ) -> dict[str, np.ndarray]:
     """Aggregate a list of score dicts into a dict of arrays.
 
-    Transforms [{'a': 0.1, 'b': 0.2}, {'a': 0.3, 'b': 0.4}]
-    into {'a': array([0.1, 0.3]), 'b': array([0.2, 0.4])}
+    Transforms ``[{'a': 0.1, 'b': 0.2}, {'a': 0.3, 'b': 0.4}]``
+    into ``{'a': array([0.1, 0.3]), 'b': array([0.2, 0.4])}``.
+
+    Parameters
+    ----------
+    scores : list of dict
+        List of score dictionaries, each mapping scorer names to float values.
+
+    Returns
+    -------
+    aggregated : dict of ndarray
+        Dictionary mapping scorer names to arrays of scores.
     """
     return {key: np.asarray([score[key] for score in scores]) for key in scores[0]}
 
@@ -124,7 +134,16 @@ def _insert_error_scores(
     results: list[dict[str, Any]],
     error_score: float | int,
 ) -> None:
-    """Insert error_score into results for failed fits (in-place)."""
+    """Insert error_score into results for failed fits (in-place).
+
+    Parameters
+    ----------
+    results : list of dict
+        List of result dictionaries from fitting. Each dict may contain
+        a ``fit_failed`` key and a ``scores`` key.
+    error_score : float or int
+        The error score value to insert for failed fits.
+    """
     for result in results:
         if result.get("fit_failed", False):
             scores = result.get("scores")
@@ -141,7 +160,20 @@ def _normalize_score_results(
     """Normalize score results into dict of arrays.
 
     If scores are dicts (multimetric), aggregate them.
-    If scores are scalars, wrap in dict with scalar_score_key.
+    If scores are scalars, wrap in dict with ``scalar_score_key``.
+
+    Parameters
+    ----------
+    scores : list of dict or list of float
+        List of scores. Each element is either a dict mapping scorer names
+        to floats (multimetric) or a single float (single metric).
+    scalar_score_key : str, default="score"
+        Key to use when wrapping scalar scores in a dict.
+
+    Returns
+    -------
+    normalized : dict of ndarray
+        Dictionary mapping scorer names to arrays of scores.
     """
     if isinstance(scores[0], dict):
         return _aggregate_score_dicts(scores)
@@ -152,7 +184,18 @@ def _normalize_score_results(
 def _estimator_has(attr: str) -> Callable[[BaseSearch], bool]:
     """Check if the fitted estimator has a specific attribute.
 
-    Used with available_if decorator to conditionally expose methods.
+    Used with ``available_if`` decorator to conditionally expose methods.
+
+    Parameters
+    ----------
+    attr : str
+        The attribute name to check for.
+
+    Returns
+    -------
+    check : callable
+        A function that takes a ``BaseSearch`` instance and returns True
+        if the estimator has the specified attribute.
     """
 
     def check(self: BaseSearch) -> bool:
@@ -175,8 +218,29 @@ def _score(
 ) -> float | dict[str, float]:
     """Compute the score(s) of an estimator on a given data set.
 
-    Will return a dict of floats if `scorer` is a dict, otherwise a single
-    float is returned.
+    Parameters
+    ----------
+    estimator : estimator object
+        Fitted estimator with ``labels_`` attribute.
+    X : array-like of shape (n_samples, n_features)
+        The data to score.
+    y : array-like of shape (n_samples,) or None
+        Ground truth labels for supervised metrics, or None for unsupervised.
+    scorer : callable or dict of callable
+        A single scorer or dict mapping scorer names to scorer callables.
+    error_score : 'raise' or numeric, default='raise'
+        Value to assign if scoring fails. If 'raise', errors are raised.
+    max_noise : float, default=0.1
+        Maximum allowed noise ratio. If exceeded, ``error_score`` is used.
+    min_cluster_size : int, default=3
+        Minimum allowed cluster size. If smallest cluster is smaller,
+        ``error_score`` is used.
+
+    Returns
+    -------
+    scores : float or dict of float
+        If ``scorer`` is a dict, returns a dict mapping scorer names to scores.
+        Otherwise returns a single float score.
     """
     if isinstance(scorer, dict):
         scorers = scorer
@@ -457,7 +521,12 @@ def _fit_and_score(
 
 
 class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
-    """Abstract base class for hyperparameter search."""
+    """Abstract base class for hyperparameter search.
+
+    This class provides the common interface and functionality for
+    hyperparameter search estimators. It should not be instantiated directly;
+    use derived classes like :class:`ClusterTuner` instead.
+    """
 
     _parameter_constraints: dict = {
         "estimator": [HasMethods(["fit"])],
@@ -494,7 +563,14 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         self.min_cluster_size = min_cluster_size
 
     def __sklearn_tags__(self):
-        """Return sklearn tags for the estimator."""
+        """Return sklearn tags for the estimator.
+
+        Returns
+        -------
+        tags : Tags
+            Sklearn tags object with estimator type and input tags inherited
+            from the wrapped estimator.
+        """
         tags = super().__sklearn_tags__()
         sub_estimator_tags = get_tags(self.estimator)
         tags.estimator_type = sub_estimator_tags.estimator_type
@@ -521,6 +597,7 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         Returns
         -------
         score : float
+            The score of the best estimator on the given data.
         """
         self._check_is_fitted("score")
         if self.scorer_ is None:
@@ -559,11 +636,24 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         Returns
         -------
         y_score : ndarray of shape (n_samples,)
+            Scores for each sample.
         """
         self._check_is_fitted("score_samples")
         return self.best_estimator_.score_samples(X)
 
     def _check_is_fitted(self, method_name: str) -> None:
+        """Check if the search estimator is fitted.
+
+        Parameters
+        ----------
+        method_name : str
+            Name of the method requiring the estimator to be fitted.
+
+        Raises
+        ------
+        NotFittedError
+            If the estimator has not been fitted or ``refit=False``.
+        """
         if not self.refit:
             raise NotFittedError(
                 f"This {type(self).__name__} instance was initialized "
@@ -588,6 +678,10 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
             Must fulfill the input assumptions of the
             underlying estimator.
 
+        Returns
+        -------
+        y_pred : ndarray of shape (n_samples,) or (n_samples, n_outputs)
+            Predicted labels or values.
         """
         self._check_is_fitted("predict")
         return self.best_estimator_.predict(X)
@@ -605,6 +699,10 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
             Must fulfill the input assumptions of the
             underlying estimator.
 
+        Returns
+        -------
+        y_proba : ndarray of shape (n_samples, n_classes)
+            Predicted class probabilities.
         """
         self._check_is_fitted("predict_proba")
         return self.best_estimator_.predict_proba(X)
@@ -622,6 +720,10 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
             Must fulfill the input assumptions of the
             underlying estimator.
 
+        Returns
+        -------
+        y_log_proba : ndarray of shape (n_samples, n_classes)
+            Predicted class log-probabilities.
         """
         self._check_is_fitted("predict_log_proba")
         return self.best_estimator_.predict_log_proba(X)
@@ -639,6 +741,10 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
             Must fulfill the input assumptions of the
             underlying estimator.
 
+        Returns
+        -------
+        y_score : ndarray of shape (n_samples,) or (n_samples, n_classes)
+            Decision function values.
         """
         self._check_is_fitted("decision_function")
         return self.best_estimator_.decision_function(X)
@@ -656,6 +762,10 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
             Must fulfill the input assumptions of the
             underlying estimator.
 
+        Returns
+        -------
+        X_new : ndarray of shape (n_samples, n_features_new)
+            Transformed data.
         """
         self._check_is_fitted("transform")
         return self.best_estimator_.transform(X)
@@ -673,6 +783,10 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
             Must fulfill the input assumptions of the
             underlying estimator.
 
+        Returns
+        -------
+        X_original : ndarray of shape (n_samples, n_features)
+            Data in the original feature space.
         """
         self._check_is_fitted("inverse_transform")
         return self.best_estimator_.inverse_transform(X)
@@ -697,7 +811,14 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
 
     @property
     def cv_results_(self) -> dict[str, Any]:
-        """Alias for results_ for GridSearchCV API compatibility."""
+        """Alias for ``results_`` for GridSearchCV API compatibility.
+
+        Returns
+        -------
+        cv_results_ : dict
+            Same as ``results_``. Provided for compatibility with code
+            that expects the GridSearchCV interface.
+        """
         return self.results_
 
     def _run_search(
@@ -767,7 +888,18 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         self,
         scores: dict[str, Callable[..., float]],
     ) -> None:
-        """Check `refit` is compatible with `scores` is valid"""
+        """Check that ``refit`` is compatible with ``scores``.
+
+        Parameters
+        ----------
+        scores : dict
+            Dictionary mapping scorer names to scorer callables.
+
+        Raises
+        ------
+        ValueError
+            If ``refit`` is not False, not a valid scorer name, and not callable.
+        """
         multimetric_refit_msg = (
             "For multi-metric scoring, the parameter refit must be set to a "
             "scorer key or a callable to refit an estimator with the best "

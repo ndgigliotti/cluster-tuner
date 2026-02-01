@@ -8,15 +8,17 @@ A GridSearchCV-like hyperparameter tuner for clustering algorithms.
 pip install cluster-tuner
 ```
 
+**Requirements:** Python >= 3.10, scikit-learn >= 1.6
+
 ## Purpose
 
-This project provides a simple, Scikit-Learn-compatible, hyperparameter tuning tool for clustering. It's intended for situations where predicting clusters for new data points is a low priority. Many clustering algorithms in Scikit-Learn are **transductive**, meaning that they are not designed to be applied to new observations. Even if using an **inductive** clustering algorithm like K-Means, you might not have any desire to predict clusters for new observations. Or, even if you do have such a desire, prediction might be a lower priority than finding the best clusters in the data.
+This project provides a simple, scikit-learn-compatible hyperparameter tuning tool for clustering. It's intended for situations where predicting clusters for new data points is a low priority. Many clustering algorithms in scikit-learn are **transductive**, meaning they are not designed to be applied to new observations. Even when using an **inductive** algorithm like KMeans, you might not need to predict clusters for new data—or prediction might be a lower priority than finding the best clusters.
 
-Since Scikit-Learn's `GridSearchCV` uses cross-validation, and is designed to optimize inductive machine learning models, an alternative tool is necessary.
+Since scikit-learn's `GridSearchCV` uses cross-validation and is designed for inductive models, an alternative tool is necessary.
 
 ## `ClusterTuner`
 
-The `ClusterTuner` class is a hyperparameter search tool for tuning clustering algorithms. It simply fits one model per hyperparameter combination and selects the best. It's a spin-off of `GridSearchCV`, and the implementation is derived from Scikit-Learn. The only difference is that it doesn't use cross-validation and is designed to work with special clustering scorers. It's not always necessary to provide a target variable, since clustering metrics such as silhouette, Calinski-Harabasz, and Davies-Bouldin are designed for unsupervised clustering.
+The `ClusterTuner` class is a hyperparameter search tool for clustering algorithms. It fits one model per hyperparameter combination and selects the best. The implementation is derived from scikit-learn's `GridSearchCV`, but without cross-validation. It works with clustering-specific scorers and doesn't always require a target variable, since metrics like silhouette, Calinski-Harabasz, and Davies-Bouldin are designed for unsupervised evaluation.
 
 The interface is largely the same as `GridSearchCV`. Results are stored in the `results_` attribute (`cv_results_` also works as an alias for compatibility).
 
@@ -36,18 +38,23 @@ tuner.fit(X)
 print(tuner.best_params_)
 print(tuner.best_score_)
 labels = tuner.labels_
+
+# Access detailed results (single-metric uses 'test_score')
+print(tuner.results_['test_score'])
 ```
 
 ### Key Parameters
 
-- **`max_noise`** (default=0.1): Maximum allowed ratio of noise points (label=-1). Fits exceeding this threshold receive `error_score` instead.
-- **`min_cluster_size`** (default=3): Minimum allowed size for the smallest cluster. Fits with smaller clusters receive `error_score` instead.
-
-These parameters help filter out degenerate clustering solutions where most points are noise or clusters are too small to be meaningful.
+- **`scoring`**: Metric name (string), callable, or list/dict for multi-metric evaluation.
+- **`refit`** (default=True): Whether to refit the best estimator on the full dataset. For multi-metric, must be a string specifying which metric to use.
+- **`max_noise`** (default=0.1): Maximum allowed ratio of noise points (label=-1). Fits exceeding this threshold receive `error_score`.
+- **`min_cluster_size`** (default=3): Minimum allowed size for the smallest cluster. Fits with smaller clusters receive `error_score`.
+- **`error_score`** (default=np.nan): Value to assign when a fit fails or violates constraints. Use `'raise'` to raise exceptions instead.
+- **`n_jobs`**: Number of parallel jobs (-1 for all CPUs).
 
 ### Multi-Metric Scoring
 
-You can evaluate multiple metrics simultaneously using a list, tuple, or dict:
+Evaluate multiple metrics simultaneously using a list, tuple, or dict:
 
 ```python
 tuner = ClusterTuner(
@@ -58,20 +65,58 @@ tuner = ClusterTuner(
 )
 tuner.fit(X)
 
-# Results include all metrics (prefixed with 'test_')
+# Results use 'test_' prefix for each metric
 print(tuner.results_['test_silhouette'])
 print(tuner.results_['test_calinski_harabasz'])
 print(tuner.results_['test_neg_davies_bouldin'])
 ```
 
-## Transductive Clustering Scorers
+### Supervised Scoring
 
-You can use `ClusterTuner` by passing the string name of a Scikit-Learn clustering metric, e.g. 'silhouette', 'calinski_harabasz', or 'rand_score' (the '_score' suffix is optional). You can also create a special scorer for transductive clustering using `scorer.make_scorer` on any score function with the signature `score_func(labels_true, labels_fit)` or `score_func(X, labels_fit)`.
+When ground truth labels are available, use supervised metrics:
 
+```python
+from sklearn.cluster import KMeans
+
+tuner = ClusterTuner(
+    KMeans(n_init='auto'),
+    param_grid={'n_clusters': [2, 3, 4, 5]},
+    scoring='adjusted_rand',
+)
+tuner.fit(X, y=y_true)  # Pass ground truth labels
+
+print(tuner.best_score_)  # Adjusted Rand Index
+```
+
+### Pipeline Support
+
+`ClusterTuner` works with scikit-learn pipelines:
+
+```python
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+
+pipe = make_pipeline(
+    StandardScaler(),
+    PCA(n_components=10),
+    KMeans(n_init='auto'),
+)
+
+tuner = ClusterTuner(
+    pipe,
+    param_grid={'kmeans__n_clusters': [2, 3, 4, 5]},
+    scoring='silhouette',
+)
+tuner.fit(X)
+```
+
+## Scorers
+
+You can use `ClusterTuner` by passing the string name of a clustering metric, e.g., `'silhouette'`, `'calinski_harabasz'`, or `'adjusted_rand'` (the `_score` suffix is optional).
 
 ### Recognized Scorer Names
-
-Note that the `_score` suffix is always optional (e.g., `'silhouette'` and `'silhouette_score'` both work).
 
 **Unsupervised metrics** (no ground truth required):
 - `'silhouette'` / `'silhouette_score'`
@@ -91,19 +136,39 @@ Note that the `_score` suffix is always optional (e.g., `'silhouette'` and `'sil
 - `'homogeneity'` / `'homogeneity_score'`
 - `'v_measure'` / `'v_measure_score'`
 
-#### Naming Convention
+### Naming Convention
 
-Following sklearn's convention, metrics where **lower is better** use a `neg_` prefix. The score is negated internally so that higher values always indicate better clustering. This applies to:
+Following sklearn's convention, metrics where **lower is better** use a `neg_` prefix. The score is negated internally so that higher values always indicate better clustering:
 - `'neg_davies_bouldin'` — Davies-Bouldin index (lower raw values = better separation)
 
-The old name `'davies_bouldin'` still works for backwards compatibility but `'neg_davies_bouldin'` is preferred.
+### Custom Scorers
+
+Create custom scorers using `make_scorer`:
+
+```python
+from cluster_tuner import make_scorer
+
+# Unsupervised scorer: score_func(X, labels)
+def my_metric(X, labels):
+    return some_score
+
+scorer = make_scorer(my_metric, ground_truth=False)
+
+# Supervised scorer: score_func(y_true, labels)
+def my_supervised_metric(y_true, labels):
+    return some_score
+
+scorer = make_scorer(my_supervised_metric, ground_truth=True)
+
+tuner = ClusterTuner(estimator, param_grid, scoring=scorer)
+```
 
 ## Caveats
 
 ### Comparing Clustering Algorithms
 
-It's important to consider your dataset and goals before comparing clustering algorithms in a grid search. Just because one algorithm gets a higher score than another does not necessarily make it a better choice. Different clustering algorithms have [different benefits, drawbacks, and use cases.](https://scikit-learn.org/stable/modules/clustering.html#overview-of-clustering-methods)
+Consider your dataset and goals before comparing clustering algorithms. A higher score doesn't necessarily mean a better choice—different algorithms have [different benefits, drawbacks, and use cases](https://scikit-learn.org/stable/modules/clustering.html#overview-of-clustering-methods).
 
 ## Credits
 
-Most of the credit goes to the developers of Scikit-Learn for the engineering behind the search estimators. It's not very hard to spam a bunch of models with different hyperparameters, but it's hard to do it in a robust way with a friendly interface and wide compatibility.
+Most of the credit goes to the scikit-learn developers for the engineering behind the search estimators.

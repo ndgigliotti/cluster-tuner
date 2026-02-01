@@ -5,23 +5,20 @@ import pytest
 from sklearn import cluster, datasets
 from sklearn import preprocessing as prep
 from sklearn.base import BaseEstimator, ClusterMixin
-from sklearn.pipeline import make_pipeline
 from sklearn.exceptions import NotFittedError
+from sklearn.pipeline import make_pipeline
 
-from cluster_tuner import make_scorer, SCORERS
+from cluster_tuner import SCORERS, make_scorer
 from cluster_tuner.scorer import (
+    _check_multimetric_scoring,
     _get_labels,
     _noise_ratio,
-    _smallest_clust_size,
-    _remove_noise_cluster,
-    _LabelScorerSupervised,
-    _LabelScorerUnsupervised,
-    get_scorer,
-    check_scoring,
-    _check_multimetric_scoring,
     _passthrough_scorer,
+    _remove_noise_cluster,
+    _smallest_clust_size,
+    check_scoring,
+    get_scorer,
 )
-
 
 # =============================================================================
 # Helper classes
@@ -187,7 +184,9 @@ class TestGetLabels:
 
     def test_pipeline(self, iris_data):
         X, _ = iris_data
-        pipe = make_pipeline(prep.StandardScaler(), cluster.KMeans(n_clusters=3, n_init="auto"))
+        pipe = make_pipeline(
+            prep.StandardScaler(), cluster.KMeans(n_clusters=3, n_init="auto")
+        )
         pipe.fit(X)
         labels = _get_labels(pipe)
         assert isinstance(labels, np.ndarray)
@@ -322,8 +321,12 @@ class TestMakeScorer:
         def loss_func(X, labels):
             return 10.0  # Fixed loss
 
-        scorer_loss = make_scorer(loss_func, ground_truth=False, greater_is_better=False)
-        scorer_score = make_scorer(loss_func, ground_truth=False, greater_is_better=True)
+        scorer_loss = make_scorer(
+            loss_func, ground_truth=False, greater_is_better=False
+        )
+        scorer_score = make_scorer(
+            loss_func, ground_truth=False, greater_is_better=True
+        )
 
         est = cluster.KMeans(n_clusters=3, random_state=42, n_init="auto")
         est.fit(X)
@@ -409,6 +412,7 @@ class TestCheckScoring:
 
     def test_iterable_scoring_returns_multimetric(self):
         from cluster_tuner.scorer import _MultimetricScorer
+
         est = cluster.KMeans(n_clusters=3, n_init="auto")
         scorer = check_scoring(est, ["silhouette", "calinski_harabasz"])
         assert isinstance(scorer, _MultimetricScorer)
@@ -458,7 +462,9 @@ class TestCheckMultimetricScoringPrivate:
     def test_callable_in_list_error(self):
         est = cluster.KMeans(n_clusters=3, n_init="auto")
         with pytest.raises(ValueError, match="callables"):
-            _check_multimetric_scoring(est, [SCORERS["silhouette"], "calinski_harabasz"])
+            _check_multimetric_scoring(
+                est, [SCORERS["silhouette"], "calinski_harabasz"]
+            )
 
     def test_non_string_in_list_error(self):
         est = cluster.KMeans(n_clusters=3, n_init="auto")
@@ -471,13 +477,14 @@ class TestMultimetricScorer:
 
     def test_basic_multimetric(self, iris_data):
         from cluster_tuner.scorer import _MultimetricScorer
+
         X, _ = iris_data
         est = cluster.KMeans(n_clusters=3, random_state=42, n_init="auto")
         est.fit(X)
 
         scorer = _MultimetricScorer(
             scorers={"sil": SCORERS["silhouette"], "cal": SCORERS["calinski_harabasz"]},
-            raise_exc=True
+            raise_exc=True,
         )
         scores = scorer(est, X)
         assert isinstance(scores, dict)
@@ -486,6 +493,7 @@ class TestMultimetricScorer:
 
     def test_multimetric_error_handling(self, iris_data):
         from cluster_tuner.scorer import _MultimetricScorer
+
         X, _ = iris_data
         est = AllNoiseClusterer()
         est.fit(X)
@@ -493,10 +501,7 @@ class TestMultimetricScorer:
         def bad_scorer(est, X, y=None):
             raise ValueError("Scoring failed")
 
-        scorer = _MultimetricScorer(
-            scorers={"bad": bad_scorer},
-            raise_exc=False
-        )
+        scorer = _MultimetricScorer(scorers={"bad": bad_scorer}, raise_exc=False)
         scores = scorer(est, X)
         assert np.isnan(scores["bad"])
 
