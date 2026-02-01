@@ -9,7 +9,7 @@ from collections.abc import Callable, Sequence
 from contextlib import suppress
 from functools import partial
 from traceback import format_exc
-from typing import Any, Literal, TYPE_CHECKING, cast
+from typing import Any, Literal, cast
 
 import joblib
 import numpy as np
@@ -977,12 +977,18 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         refit_metric = "test_score"
 
         if callable(self.scoring):
-            scorers: Callable[..., float] | dict[str, Callable[..., float]] | _MultimetricScorer = self.scoring
+            scorers: (
+                Callable[..., float]
+                | dict[str, Callable[..., float]]
+                | _MultimetricScorer
+            ) = self.scoring
         elif self.scoring is None or isinstance(self.scoring, str):
             scorers = check_scoring(self.estimator, self.scoring)
         else:
             scorers = _check_multimetric_scoring(self.estimator, self.scoring)
-            self._check_refit_for_multimetric(cast(dict[str, Callable[..., float]], scorers))
+            self._check_refit_for_multimetric(
+                cast(dict[str, Callable[..., float]], scorers)
+            )
             refit_metric = f"test_{self.refit}"
 
         # Handle _MultimetricScorer
