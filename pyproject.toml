@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cluster-tuner"
-version = "0.1.0"
+version = "0.1.1"
 description = "A GridSearchCV-like hyperparameter tuner for clustering algorithms."
 readme = "README.md"
 license = {text = "BSD-3-Clause"}
 authors = [
-    {name = "nick_gigliotti", email = "ndgigliotti@gmail.com"}
+    {name = "Nicholas Gigliotti", email = "ndgigliotti@gmail.com"}
 ]
 requires-python = ">=3.10"
 classifiers = [
