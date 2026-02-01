@@ -69,7 +69,7 @@ exclude = [
 ]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I"]
+select = ["E", "F", "W", "I", "UP"]
 ignore = [
     "E203",  # whitespace before ':'
     "E731",  # do not assign a lambda expression

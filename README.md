@@ -58,10 +58,10 @@ tuner = ClusterTuner(
 )
 tuner.fit(X)
 
-# Results include all metrics
-print(tuner.results_['silhouette'])
-print(tuner.results_['calinski_harabasz'])
-print(tuner.results_['neg_davies_bouldin'])
+# Results include all metrics (prefixed with 'test_')
+print(tuner.results_['test_silhouette'])
+print(tuner.results_['test_calinski_harabasz'])
+print(tuner.results_['test_neg_davies_bouldin'])
 ```
 
 ## Transductive Clustering Scorers

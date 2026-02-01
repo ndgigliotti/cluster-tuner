@@ -54,8 +54,8 @@ print(f"  Best silhouette: {tuner.best_score_:.3f}")
 # Access all metrics from results
 results = tuner.results_
 best_idx = tuner.best_index_
-print(f"  Calinski-Harabasz at best: {results['calinski_harabasz'][best_idx]:.1f}")
-print(f"  Davies-Bouldin at best: {-results['neg_davies_bouldin'][best_idx]:.3f}")
+print(f"  Calinski-Harabasz at best: {results['test_calinski_harabasz'][best_idx]:.1f}")
+print(f"  Davies-Bouldin at best: {-results['test_neg_davies_bouldin'][best_idx]:.3f}")
 
 # %%
 # Using supervised metrics
@@ -93,6 +93,6 @@ print(f"  Best parameters: {tuner.best_params_}")
 print(f"  Best score: {tuner.best_score_:.3f}")
 
 # Check how many parameter combinations were rejected
-n_failed = np.isnan(tuner.results_["score"]).sum()
-n_total = len(tuner.results_["score"])
+n_failed = np.isnan(tuner.results_["test_score"]).sum()
+n_total = len(tuner.results_["test_score"])
 print(f"  Rejected {n_failed}/{n_total} parameter combinations")

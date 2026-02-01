@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
+from functools import partial
 from types import MappingProxyType
 from typing import Any
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
-from sklearn import metrics, preprocessing as pp
+from sklearn import metrics
+from sklearn import preprocessing as pp
 from sklearn.base import BaseEstimator
 from sklearn.metrics._scorer import _BaseScorer
-
-
 from sklearn.pipeline import Pipeline
 from sklearn.utils.validation import check_consistent_length, check_is_fitted
 
@@ -68,19 +68,29 @@ def _remove_noise_cluster(
     return tuple(result)
 
 
+def _cached_call(cache: Any, method: Any, *args: Any, **kwargs: Any) -> None:
+    """Dummy cached call for clustering (no caching needed)."""
+    return None
+
+
 class _LabelScorerSupervised(_BaseScorer):
     """Scorer for clustering metrics that require ground truth labels."""
 
     def _score(
         self,
+        method_caller: Callable[..., Any],
         estimator: BaseEstimator,
         X: ArrayLike,
         labels_true: ArrayLike,
+        **kwargs: Any,
     ) -> float:
         """Evaluate estimator labels relative to y_true.
 
         Parameters
         ----------
+        method_caller : callable
+            Method caller for caching (ignored for clustering since we use labels_).
+
         estimator : object
             Trained estimator to use for scoring. Must have `labels_` attribute.
 
@@ -90,6 +100,9 @@ class _LabelScorerSupervised(_BaseScorer):
 
         labels_true : array-like
             Ground truth target values for cluster labels.
+
+        **kwargs : additional arguments
+            Additional parameters (ignored).
 
         Returns
         -------
@@ -104,7 +117,8 @@ class _LabelScorerSupervised(_BaseScorer):
         self,
         estimator: BaseEstimator,
         X: ArrayLike,
-        labels_true: ArrayLike,
+        y_true: ArrayLike | None = None,
+        **kwargs: Any,
     ) -> float:
         """Evaluate estimator labels relative to y_true.
 
@@ -117,8 +131,11 @@ class _LabelScorerSupervised(_BaseScorer):
             Does nothing, since estimator should already have `labels_`.
             Here for API compatibility.
 
-        labels_true : array-like
+        y_true : array-like
             Ground truth target values for cluster labels.
+
+        **kwargs : additional arguments
+            Additional parameters passed to _score.
 
         Returns
         -------
@@ -126,9 +143,11 @@ class _LabelScorerSupervised(_BaseScorer):
             Score function applied to cluster labels.
         """
         return self._score(
+            partial(_cached_call, None),
             estimator,
             X,
-            labels_true,
+            y_true,
+            **kwargs,
         )
 
 
@@ -137,14 +156,19 @@ class _LabelScorerUnsupervised(_BaseScorer):
 
     def _score(
         self,
+        method_caller: Callable[..., Any],
         estimator: BaseEstimator,
         X: ArrayLike,
         labels_true: ArrayLike | None = None,
+        **kwargs: Any,
     ) -> float:
         """Evaluate cluster labels on X.
 
         Parameters
         ----------
+        method_caller : callable
+            Method caller for caching (ignored for clustering since we use labels_).
+
         estimator : object
             Trained estimator to use for scoring. Must have `labels_` attribute.
 
@@ -153,6 +177,9 @@ class _LabelScorerUnsupervised(_BaseScorer):
 
         labels_true: array-like
             Does nothing. Here for API compatibility.
+
+        **kwargs : additional arguments
+            Additional parameters (ignored).
 
         Returns
         -------
@@ -169,7 +196,8 @@ class _LabelScorerUnsupervised(_BaseScorer):
         self,
         estimator: BaseEstimator,
         X: ArrayLike,
-        labels_true: ArrayLike | None = None,
+        y_true: ArrayLike | None = None,
+        **kwargs: Any,
     ) -> float:
         """Evaluate predicted target values for X relative to y_true.
 
@@ -181,8 +209,11 @@ class _LabelScorerUnsupervised(_BaseScorer):
         X : {array-like, sparse matrix}
             Data that will be used to evaluate cluster labels.
 
-        labels_true: array-like
+        y_true: array-like
             Does nothing. Here for API compatibility.
+
+        **kwargs : additional arguments
+            Additional parameters passed to _score.
 
         Returns
         -------
@@ -190,14 +221,42 @@ class _LabelScorerUnsupervised(_BaseScorer):
             Score function applied cluster labels.
         """
         return self._score(
+            partial(_cached_call, None),
             estimator,
             X,
+            y_true,
+            **kwargs,
         )
+
+
+class _MultimetricScorer:
+    """Scorer that wraps multiple scorers."""
+
+    def __init__(
+        self, *, scorers: dict[str, Callable[..., float]], raise_exc: bool = True
+    ):
+        self._scorers = scorers
+        self._raise_exc = raise_exc
+
+    def __call__(
+        self, estimator: BaseEstimator, *args: Any, **kwargs: Any
+    ) -> dict[str, float]:
+        scores: dict[str, float] = {}
+        for name, scorer in self._scorers.items():
+            try:
+                score = scorer(estimator, *args, **kwargs)
+                scores[name] = score
+            except Exception:
+                if self._raise_exc:
+                    raise
+                scores[name] = float("nan")
+        return scores
 
 
 def make_scorer(
     score_func: Callable[..., float],
     *,
+    response_method: str = "predict",
     ground_truth: bool = True,
     greater_is_better: bool = True,
     **kwargs: Any,
@@ -222,6 +281,11 @@ def make_scorer(
         Score function (or loss function) with signature
         ``score_func(y, y_pred, **kwargs)``.
 
+    response_method : str, default="predict"
+        The method to call on the estimator. For clustering scorers, this
+        parameter is stored but not used since we access labels_ directly.
+        Provided for API compatibility with sklearn.
+
     ground_truth : bool, default=True
         Whether score_func uses ground truth labels.
 
@@ -238,6 +302,8 @@ def make_scorer(
     scorer : callable
         Callable object that returns a scalar score; greater is better.
     """
+    # response_method is stored in kwargs for API compatibility but not used
+    # since clustering scorers access labels_ directly
     sign = 1 if greater_is_better else -1
     if ground_truth:
         cls = _LabelScorerSupervised
@@ -310,8 +376,14 @@ def get_scorer(
 
 def check_scoring(
     estimator: BaseEstimator,
-    scoring: str | Callable[..., float] | None = None,
-) -> Callable[..., float]:
+    scoring: str
+    | Callable[..., float]
+    | Iterable[str]
+    | dict[str, Callable[..., float]]
+    | None = None,
+    *,
+    raise_exc: bool = True,
+) -> Callable[..., float] | _MultimetricScorer:
     """Determine scorer from user options.
 
     A TypeError will be thrown if the estimator cannot be scored.
@@ -321,16 +393,23 @@ def check_scoring(
     estimator : estimator object implementing 'fit'
         The object to use to fit the data.
 
-    scoring : str or callable, default=None
+    scoring : str, callable, list, tuple, set, dict or None, default=None
         A string (see model evaluation documentation) or
         a scorer callable object / function with signature
         ``scorer(estimator, X, y)``.
+        For evaluating multiple metrics, a list/tuple/set of strings
+        or a dict with names as keys and callables as values can be passed.
+
+    raise_exc : bool, default=True
+        Whether to raise an exception if scoring fails. If False,
+        failed scores will be set to NaN.
 
     Returns
     -------
-    scoring : callable
+    scoring : callable or _MultimetricScorer
         A scorer callable object / function with signature
-        ``scorer(estimator, X, y)``.
+        ``scorer(estimator, X, y)``, or a _MultimetricScorer for
+        multi-metric scoring.
     """
     if not hasattr(estimator, "fit"):
         raise TypeError(
@@ -339,6 +418,9 @@ def check_scoring(
         )
     if isinstance(scoring, str):
         return get_scorer(scoring)
+    elif isinstance(scoring, list | tuple | set | dict):
+        scorers = _check_multimetric_scoring(estimator, scoring=scoring)
+        return _MultimetricScorer(scorers=scorers, raise_exc=raise_exc)
     elif callable(scoring):
         # Heuristic to ensure user has not passed a metric
         module = getattr(scoring, "__module__", None)
@@ -363,12 +445,6 @@ def check_scoring(
                 f"If no scoring is specified, the estimator passed should "
                 f"have a 'score' method. The estimator {estimator!r} does not."
             )
-    elif isinstance(scoring, Iterable):
-        raise ValueError(
-            f"For evaluating multiple scores, use "
-            f"sklearn.model_selection.cross_validate instead. "
-            f"{scoring} was passed."
-        )
     else:
         raise ValueError(
             f"scoring value should either be a callable, string or "
@@ -376,7 +452,7 @@ def check_scoring(
         )
 
 
-def check_multimetric_scoring(
+def _check_multimetric_scoring(
     estimator: BaseEstimator,
     scoring: list[str] | tuple[str, ...] | set[str] | dict[str, Callable[..., float]],
 ) -> dict[str, Callable[..., float]]:
@@ -407,7 +483,7 @@ def check_multimetric_scoring(
         "https://scikit-learn.org/stable/glossary.html#term-scoring"
     )
 
-    if isinstance(scoring, (list, tuple, set)):
+    if isinstance(scoring, list | tuple | set):
         err_msg = (
             "The list/tuple elements must be unique " "strings of predefined scorers. "
         )

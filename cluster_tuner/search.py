@@ -21,15 +21,17 @@ from sklearn.base import BaseEstimator, MetaEstimatorMixin, clone
 from sklearn.exceptions import FitFailedWarning, NotFittedError
 from sklearn.model_selection import ParameterGrid
 from sklearn.pipeline import Pipeline
+from sklearn.utils._param_validation import HasMethods, StrOptions
+from sklearn.utils._tags import get_tags
 from sklearn.utils.metaestimators import available_if
 from sklearn.utils.validation import check_is_fitted
 
-
 from cluster_tuner.scorer import (
+    _check_multimetric_scoring,
     _get_labels,
+    _MultimetricScorer,
     _noise_ratio,
     _smallest_clust_size,
-    check_multimetric_scoring,
     check_scoring,
 )
 
@@ -196,12 +198,14 @@ def _score(
     elif smallest_clust_size < min_cluster_size:
         if error_score == "raise":
             raise RuntimeError(
-                f"Smallest cluster too small: {smallest_clust_size:.0f} < {min_cluster_size:.0f}."
+                f"Smallest cluster too small: "
+                f"{smallest_clust_size:.0f} < {min_cluster_size:.0f}."
             )
         else:
             scores = {name: error_score for name in scorers}
             warnings.warn(
-                f"Smallest cluster too small: {smallest_clust_size:.0f} < {min_cluster_size:.0f}."
+                f"Smallest cluster too small: "
+                f"{smallest_clust_size:.0f} < {min_cluster_size:.0f}. "
                 f"The score for these parameters will be set to {error_score}.",
                 UserWarning,
             )
@@ -258,7 +262,6 @@ def _fit_and_score(
     max_noise: float = 0.1,
     min_cluster_size: int = 3,
 ) -> dict[str, Any]:
-
     """Fit estimator and compute scores for clustering.
 
     Parameters
@@ -386,7 +389,7 @@ def _fit_and_score(
             estimator.fit(X, **fit_params)
         else:
             estimator.fit(X, y, **fit_params)
-    except Exception as e:
+    except Exception:
         # Note fit time as time until error
         fit_time = time.time() - start_time
         score_time = 0.0
@@ -409,7 +412,9 @@ def _fit_and_score(
         result["fit_failed"] = False
 
         fit_time = time.time() - start_time
-        scores = _score(estimator, X, y, scorer, error_score, max_noise, min_cluster_size)
+        scores = _score(
+            estimator, X, y, scorer, error_score, max_noise, min_cluster_size
+        )
         noise_ratio = _noise_ratio(_get_labels(estimator))
         smallest_clust_size = _smallest_clust_size(_get_labels(estimator))
         score_time = time.time() - start_time - fit_time
@@ -454,6 +459,16 @@ def _fit_and_score(
 class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
     """Abstract base class for hyperparameter search."""
 
+    _parameter_constraints: dict = {
+        "estimator": [HasMethods(["fit"])],
+        "scoring": [callable, list, tuple, dict, str, None],
+        "n_jobs": [numbers.Integral, None],
+        "refit": ["boolean", str, callable],
+        "verbose": ["verbose"],
+        "pre_dispatch": [numbers.Integral, str],
+        "error_score": [StrOptions({"raise"}), numbers.Real],
+    }
+
     @abstractmethod
     def __init__(
         self,
@@ -478,28 +493,12 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         self.max_noise = max_noise
         self.min_cluster_size = min_cluster_size
 
-    @property
-    def _estimator_type(self) -> str:
-        # Check for direct attribute (sklearn < 1.8)
-        if hasattr(self.estimator, "_estimator_type"):
-            return self.estimator._estimator_type
-        # Check via tags (sklearn 1.8+)
-        if hasattr(self.estimator, "__sklearn_tags__"):
-            tags = self.estimator.__sklearn_tags__()
-            if hasattr(tags, "estimator_type"):
-                return tags.estimator_type
-        return "clusterer"  # Default for clustering estimators
-
     def __sklearn_tags__(self):
         """Return sklearn tags for the estimator."""
         tags = super().__sklearn_tags__()
-
-        # Get pairwise tag from wrapped estimator
-        if hasattr(self.estimator, "__sklearn_tags__"):
-            estimator_tags = self.estimator.__sklearn_tags__()
-            if hasattr(estimator_tags, "input_tags"):
-                tags.input_tags.pairwise = estimator_tags.input_tags.pairwise
-
+        sub_estimator_tags = get_tags(self.estimator)
+        tags.estimator_type = sub_estimator_tags.estimator_type
+        tags.input_tags.pairwise = sub_estimator_tags.input_tags.pairwise
         return tags
 
     def score(self, X: ArrayLike, y: ArrayLike | None = None) -> float:
@@ -662,7 +661,7 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         return self.best_estimator_.transform(X)
 
     @available_if(_estimator_has("inverse_transform"))
-    def inverse_transform(self, Xt: ArrayLike) -> NDArray[Any]:
+    def inverse_transform(self, X: ArrayLike) -> NDArray[Any]:
         """Call inverse_transform on the estimator with the best found params.
 
         Only available if the underlying estimator implements
@@ -670,13 +669,13 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
 
         Parameters
         ----------
-        Xt : indexable, length n_samples
+        X : indexable, length n_samples
             Must fulfill the input assumptions of the
             underlying estimator.
 
         """
         self._check_is_fitted("inverse_transform")
-        return self.best_estimator_.inverse_transform(Xt)
+        return self.best_estimator_.inverse_transform(X)
 
     @property
     def n_features_in_(self) -> int:
@@ -787,6 +786,19 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         ):
             raise ValueError(multimetric_refit_msg)
 
+    @staticmethod
+    def _select_best_index(refit, refit_metric, results):
+        """Select the best index based on refit strategy."""
+        if callable(refit):
+            best_index = refit(results)
+            if not isinstance(best_index, numbers.Integral):
+                raise TypeError("best_index_ returned is not an integer")
+            if best_index < 0 or best_index >= len(results["params"]):
+                raise IndexError("best_index_ index out of range")
+        else:
+            best_index = results[f"rank_{refit_metric}"].argmin()
+        return best_index
+
     def fit(
         self,
         X: ArrayLike,
@@ -811,16 +823,22 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
             Parameters passed to the ``fit`` method of the estimator
         """
         # estimator = self.estimator
-        refit_metric = "score"
+        refit_metric = "test_score"
 
         if callable(self.scoring):
             scorers = self.scoring
         elif self.scoring is None or isinstance(self.scoring, str):
             scorers = check_scoring(self.estimator, self.scoring)
         else:
-            scorers = check_multimetric_scoring(self.estimator, self.scoring)
+            scorers = _check_multimetric_scoring(self.estimator, self.scoring)
             self._check_refit_for_multimetric(scorers)
-            refit_metric = self.refit
+            refit_metric = f"test_{self.refit}"
+
+        # Handle _MultimetricScorer
+        if isinstance(scorers, _MultimetricScorer):
+            self.scorer_ = scorers._scorers
+        else:
+            self.scorer_ = scorers
 
         # X, y = indexable(X, y)
         fit_params = _check_fit_params(X, fit_params)
@@ -906,22 +924,16 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
             # check refit_metric now for a callabe scorer that is multimetric
             if callable(self.scoring) and self.multimetric_:
                 self._check_refit_for_multimetric(first_score)
-                refit_metric = self.refit
+                refit_metric = f"test_{self.refit}"
 
         # For multi-metric evaluation, store the best_index_, best_params_ and
         # best_score_ iff refit is one of the scorer names
-        # In single metric evaluation, refit_metric is "score"
+        # In single metric evaluation, refit_metric is "test_score"
         if self.refit or not self.multimetric_:
-            # If callable, refit is expected to return the index of the best
-            # parameter set.
-            if callable(self.refit):
-                self.best_index_ = self.refit(results)
-                if not isinstance(self.best_index_, numbers.Integral):
-                    raise TypeError("best_index_ returned is not an integer")
-                if self.best_index_ < 0 or self.best_index_ >= len(results["params"]):
-                    raise IndexError("best_index_ index out of range")
-            else:
-                self.best_index_ = results[f"rank_{refit_metric}"].argmin()
+            self.best_index_ = self._select_best_index(
+                self.refit, refit_metric, results
+            )
+            if not callable(self.refit):
                 self.best_score_ = results[refit_metric][self.best_index_]
             self.best_params_ = results["params"][self.best_index_]
 
@@ -939,8 +951,8 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
             refit_end_time = time.time()
             self.refit_time_ = refit_end_time - refit_start_time
 
-        # Store the only scorer not as a dict for single metric evaluation
-        self.scorer_ = scorers
+            if hasattr(self.best_estimator_, "feature_names_in_"):
+                self.feature_names_in_ = self.best_estimator_.feature_names_in_
 
         self.n_splits_ = 1
         self.results_ = results
@@ -1009,7 +1021,7 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
 
         for scorer_name in scores_dict:
             _store(
-                scorer_name,
+                f"test_{scorer_name}",
                 scores_dict[scorer_name],
                 rank=True,
             )
