@@ -419,13 +419,13 @@ def _fit_and_score(
     progress_msg = ""
     if verbose > 2:
         if candidate_progress and verbose > 9:
-            progress_msg += f"{candidate_progress[0]+1}/" f"{candidate_progress[1]}"
+            progress_msg += f"{candidate_progress[0] + 1}/{candidate_progress[1]}"
 
     if verbose > 1:
         if parameters is None:
             params_msg = ""
         else:
-            sorted_keys = sorted(parameters)  # Ensure deterministic o/p
+            sorted_keys = sorted(parameters)  # Ensure deterministic output
             params_msg = ", ".join(f"{k}={parameters[k]}" for k in sorted_keys)
     if verbose > 9:
         start_msg = f"[CAND {progress_msg}] START {params_msg}"
@@ -492,7 +492,7 @@ def _fit_and_score(
                 result_msg += f" {scorer_name}: ("
                 result_msg += f"score={scores[scorer_name]:.3f})"
         result_msg += f" noise_ratio={noise_ratio:.2f}"
-        result_msg += f" smallest_clust_size={min_cluster_size:.0f}"
+        result_msg += f" smallest_clust_size={smallest_clust_size:.0f}"
         result_msg += f" total_time={joblib.logger.short_format_time(total_time)}"
 
         # Right align the result_msg
@@ -828,18 +828,10 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         """Repeatedly calls `evaluate_candidates` to conduct a search.
 
         This method, implemented in sub-classes, makes it possible to
-        customize the the scheduling of evaluations: GridSearchCV and
-        RandomizedSearchCV schedule evaluations for their whole parameter
-        search space at once but other more sequential approaches are also
-        possible: for instance is possible to iteratively schedule evaluations
-        for new regions of the parameter search space based on previously
-        collected evaluation results. This makes it possible to implement
-        Bayesian optimization or more generally sequential model-based
-        optimization by deriving from the BaseSearchCV abstract base class.
-        For example, Successive Halving is implemented by calling
-        `evaluate_candidates` multiples times (once per iteration of the SH
-        process), each time passing a different set of candidates with `X`
-        and `y` of increasing sizes.
+        customize the scheduling of evaluations. For example, all candidates
+        can be evaluated at once, or evaluations can be scheduled iteratively
+        based on previously collected results (e.g., for Bayesian optimization
+        or sequential model-based optimization).
 
         Parameters
         ----------
@@ -847,28 +839,12 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
             This callback accepts:
                 - a list of candidates, where each candidate is a dict of
                   parameter settings.
-                - an optional `cv` parameter which can be used to e.g.
-                  evaluate candidates on different dataset splits, or
-                  evaluate candidates on subsampled data (as done in the
-                  SucessiveHaling estimators). By default, the original `cv`
-                  parameter is used, and it is available as a private
-                  `_checked_cv_orig` attribute.
                 - an optional `more_results` dict. Each key will be added to
-                  the `cv_results_` attribute. Values should be lists of
-                  length `n_candidates`
+                  the `results_` attribute. Values should be lists of
+                  length `n_candidates`.
 
             It returns a dict of all results so far, formatted like
-            ``cv_results_``.
-
-            Important note (relevant whether the default cv is used or not):
-            in randomized splitters, and unless the random_state parameter of
-            cv was set to an int, calling cv.split() multiple times will
-            yield different splits. Since cv.split() is called in
-            evaluate_candidates, this means that candidates will be evaluated
-            on different splits each time evaluate_candidates is called. This
-            might be a methodological issue depending on the search strategy
-            that you're implementing. To prevent randomized splitters from
-            being used, you may use _split._yields_constant_splits()
+            ``results_``.
 
         Examples
         --------
@@ -878,7 +854,7 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
             def _run_search(self, evaluate_candidates):
                 'Try C=0.1 only if C=1 is better than C=10'
                 all_results = evaluate_candidates([{'C': 1}, {'C': 10}])
-                score = all_results['mean_test_score']
+                score = all_results['test_score']
                 if score[0] < score[1]:
                     evaluate_candidates([{'C': 0.1}])
         """
@@ -983,7 +959,6 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         self : object
             Instance of fitted estimator.
         """
-        # estimator = self.estimator
         refit_metric = "test_score"
 
         if callable(self.scoring):
@@ -1001,7 +976,6 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         else:
             self.scorer_ = scorers
 
-        # X, y = indexable(X, y)
         fit_params = _check_fit_params(X, fit_params)
 
         base_estimator = clone(self.estimator)
@@ -1082,7 +1056,7 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
             first_score = all_out[0]["scores"]
             self.multimetric_ = isinstance(first_score, dict)
 
-            # check refit_metric now for a callabe scorer that is multimetric
+            # check refit_metric now for a callable scorer that is multimetric
             if callable(self.scoring) and self.multimetric_:
                 self._check_refit_for_multimetric(first_score)
                 refit_metric = f"test_{self.refit}"
@@ -1158,7 +1132,7 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
 
             if np.any(~np.isfinite(array)):
                 warnings.warn(
-                    f"One or more of the {key_name} scores " f"are non-finite: {array}",
+                    f"One or more of the {key_name} scores are non-finite: {array}",
                     category=UserWarning,
                 )
 
@@ -1305,8 +1279,7 @@ class ClusterTuner(BaseSearch):
         The key ``'params'`` is used to store a list of parameter
         settings dicts for all the parameter candidates.
 
-        The ``mean_fit_time``, ``std_fit_time``, ``mean_score_time`` and
-        ``std_score_time`` are all in seconds.
+        The ``fit_time`` and ``score_time`` values are in seconds.
 
     best_estimator_ : estimator
         Estimator that was chosen by the search, i.e. estimator

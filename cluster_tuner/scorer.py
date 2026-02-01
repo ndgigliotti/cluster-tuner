@@ -389,7 +389,7 @@ def make_scorer(
     """Make a clustering scorer from a performance metric or loss function.
 
     This factory function wraps scoring functions for use in
-    :class:`~cluster_opt.ClusterOptimizer`
+    :class:`~cluster_tuner.ClusterTuner`.
     It takes a score function, such as :func:`~sklearn.metrics.silhouette_score`,
     :func:`~sklearn.metrics.mutual_info_score`, or
     :func:`~sklearn.metrics.adjusted_rand_index`
@@ -397,8 +397,6 @@ def make_scorer(
     The signature of the call is `(estimator, X, y)` where `estimator`
     is the model to be evaluated, `X` is the data and `y` is the
     ground truth labeling (or `None` in the case of unsupervised models).
-
-    Read more in the :ref:`User Guide <scoring>`.
 
     Parameters
     ----------
@@ -451,7 +449,7 @@ SCORERS = {
     ),
     # Preferred names (sklearn convention: neg_ prefix for lower-is-better)
     "neg_davies_bouldin_score": _davies_bouldin_scorer,
-    # Deprecated aliases (kept for backwards compatibility)
+    # Alternative name (without neg_ prefix)
     "davies_bouldin_score": _davies_bouldin_scorer,
     "calinski_harabasz_score": make_scorer(
         metrics.calinski_harabasz_score, ground_truth=False
@@ -630,7 +628,7 @@ def _check_multimetric_scoring(
 
     if isinstance(scoring, list | tuple | set):
         err_msg = (
-            "The list/tuple elements must be unique " "strings of predefined scorers. "
+            "The list/tuple elements must be unique strings of predefined scorers. "
         )
         invalid = False
         try:
