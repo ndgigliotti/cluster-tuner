@@ -4,7 +4,6 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
 [![License: BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-blue)](https://opensource.org/licenses/BSD-3-Clause)
 [![PyPI](https://img.shields.io/pypi/v/cluster-tuner.svg)](https://pypi.org/project/cluster-tuner/)
-[![Codecov](https://codecov.io/gh/ndgigliotti/cluster-tuner/branch/main/graph/badge.svg)](https://codecov.io/gh/ndgigliotti/cluster-tuner)
 
 A GridSearchCV-like hyperparameter tuner for clustering algorithms.
 
