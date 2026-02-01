@@ -920,7 +920,31 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
 
     @staticmethod
     def _select_best_index(refit, refit_metric, results):
-        """Select the best index based on refit strategy."""
+        """Select the best index based on refit strategy.
+
+        Parameters
+        ----------
+        refit : bool, str, or callable
+            The refit strategy. If callable, it should accept ``results``
+            and return the best index.
+        refit_metric : str
+            The metric name to use for selecting the best index when
+            ``refit`` is not callable.
+        results : dict
+            The results dictionary containing scores and rankings.
+
+        Returns
+        -------
+        best_index : int
+            Index of the best parameter setting in ``results``.
+
+        Raises
+        ------
+        TypeError
+            If callable ``refit`` does not return an integer.
+        IndexError
+            If callable ``refit`` returns an out-of-range index.
+        """
         if callable(refit):
             best_index = refit(results)
             if not isinstance(best_index, numbers.Integral):
@@ -952,7 +976,12 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
             None for unsupervised learning.
 
         **fit_params : dict of str -> object
-            Parameters passed to the ``fit`` method of the estimator
+            Parameters passed to the ``fit`` method of the estimator.
+
+        Returns
+        -------
+        self : object
+            Instance of fitted estimator.
         """
         # estimator = self.estimator
         refit_metric = "test_score"
@@ -1097,6 +1126,23 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         out: list[dict[str, Any]],
         more_results: dict[str, list[Any]] | None = None,
     ) -> dict[str, Any]:
+        """Format the results from parallel fitting into a results dictionary.
+
+        Parameters
+        ----------
+        candidate_params : list of dict
+            List of parameter dictionaries for each candidate.
+        out : list of dict
+            List of result dictionaries from ``_fit_and_score``.
+        more_results : dict or None, default=None
+            Additional results to include in the output dictionary.
+
+        Returns
+        -------
+        results : dict
+            Dictionary with keys as column headers and values as columns,
+            suitable for conversion to a pandas DataFrame.
+        """
         n_candidates = len(candidate_params)
         out = _aggregate_score_dicts(out)
 
@@ -1355,10 +1401,28 @@ class ClusterTuner(BaseSearch):
         self,
         evaluate_candidates: Callable[[Sequence[dict[str, Any]]], dict[str, Any]],
     ) -> None:
-        """Search all candidates in param_grid"""
+        """Search all candidates in param_grid.
+
+        Parameters
+        ----------
+        evaluate_candidates : callable
+            Callback that evaluates a list of candidate parameter dicts.
+        """
         evaluate_candidates(ParameterGrid(self.param_grid))
 
     @property
     def labels_(self) -> NDArray[np.intp]:
+        """Cluster labels from the best estimator.
+
+        Returns
+        -------
+        labels : ndarray of shape (n_samples,)
+            Cluster labels for each sample. Noise points are labeled as -1.
+
+        Raises
+        ------
+        NotFittedError
+            If the estimator has not been fitted.
+        """
         check_is_fitted(self, "best_estimator_")
         return _get_labels(self.best_estimator_)

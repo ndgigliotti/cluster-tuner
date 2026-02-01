@@ -20,14 +20,46 @@ def _passthrough_scorer(
     X: ArrayLike,
     y: ArrayLike | None = None,
 ) -> float:
-    """Call estimator.score directly (passthrough scorer)."""
+    """Call estimator.score directly (passthrough scorer).
+
+    Parameters
+    ----------
+    estimator : estimator object
+        Fitted estimator with a ``score`` method.
+    X : array-like
+        Data to score.
+    y : array-like or None, default=None
+        Target values, if applicable.
+
+    Returns
+    -------
+    score : float
+        The score from the estimator's ``score`` method.
+    """
     if y is None:
         return estimator.score(X)
     return estimator.score(X, y)
 
 
 def _get_labels(estimator: BaseEstimator | Pipeline) -> NDArray[np.intp]:
-    """Gets the cluster labels from an estimator or pipeline."""
+    """Get the cluster labels from an estimator or pipeline.
+
+    Parameters
+    ----------
+    estimator : estimator object or Pipeline
+        Fitted clustering estimator with ``labels_`` attribute, or a Pipeline
+        whose final estimator has ``labels_``.
+
+    Returns
+    -------
+    labels : ndarray of shape (n_samples,)
+        Cluster labels for each sample.
+
+    Raises
+    ------
+    NotFittedError
+        If the estimator has not been fitted.
+    """
     if isinstance(estimator, Pipeline):
         check_is_fitted(estimator._final_estimator, ["labels_"])
         labels = estimator._final_estimator.labels_
@@ -38,13 +70,40 @@ def _get_labels(estimator: BaseEstimator | Pipeline) -> NDArray[np.intp]:
 
 
 def _noise_ratio(labels: ArrayLike, noise_label: int = -1) -> float:
-    """Calculate the ratio of noise points in labels."""
+    """Calculate the ratio of noise points in labels.
+
+    Parameters
+    ----------
+    labels : array-like of shape (n_samples,)
+        Cluster labels for each sample.
+    noise_label : int, default=-1
+        The label value used to indicate noise points.
+
+    Returns
+    -------
+    ratio : float
+        Fraction of samples labeled as noise (between 0 and 1).
+    """
     labels = np.asarray(labels)
     return float((labels == noise_label).mean())
 
 
 def _smallest_clust_size(labels: ArrayLike, noise_label: int = -1) -> int:
-    """Find the size of the smallest non-noise cluster."""
+    """Find the size of the smallest non-noise cluster.
+
+    Parameters
+    ----------
+    labels : array-like of shape (n_samples,)
+        Cluster labels for each sample.
+    noise_label : int, default=-1
+        The label value used to indicate noise points.
+
+    Returns
+    -------
+    size : int
+        Size of the smallest cluster, or -1 if no clusters exist
+        (all points are noise).
+    """
     labels = pp.LabelEncoder().fit_transform(labels[labels != noise_label])
     sizes = np.bincount(labels)
     if sizes.size == 0:
@@ -59,7 +118,22 @@ def _remove_noise_cluster(
     labels: ArrayLike,
     noise_label: int = -1,
 ) -> tuple[NDArray[Any], ...]:
-    """Removes the noise cluster found in `labels` (if any) from all `arrays`."""
+    """Remove noise points from arrays based on cluster labels.
+
+    Parameters
+    ----------
+    *arrays : array-like
+        Arrays to filter. Each must have the same length as ``labels``.
+    labels : array-like of shape (n_samples,)
+        Cluster labels for each sample.
+    noise_label : int, default=-1
+        The label value used to indicate noise points.
+
+    Returns
+    -------
+    filtered_arrays : tuple of ndarray
+        Tuple of arrays with noise points removed.
+    """
     is_noise = labels == noise_label
     result: list[NDArray[Any]] = []
     for arr in arrays:
@@ -69,12 +143,34 @@ def _remove_noise_cluster(
 
 
 def _cached_call(cache: Any, method: Any, *args: Any, **kwargs: Any) -> None:
-    """Dummy cached call for clustering (no caching needed)."""
+    """Dummy cached call for clustering (no caching needed).
+
+    Parameters
+    ----------
+    cache : Any
+        Ignored. Present for API compatibility with sklearn scorers.
+    method : Any
+        Ignored. Present for API compatibility with sklearn scorers.
+    *args : Any
+        Ignored.
+    **kwargs : Any
+        Ignored.
+
+    Returns
+    -------
+    None
+        Always returns None. Clustering scorers use ``labels_`` directly
+        rather than calling prediction methods.
+    """
     return None
 
 
 class _LabelScorerSupervised(_BaseScorer):
-    """Scorer for clustering metrics that require ground truth labels."""
+    """Scorer for clustering metrics that require ground truth labels.
+
+    This scorer wraps metrics like ``adjusted_rand_score`` that compare
+    predicted cluster labels against known ground truth labels.
+    """
 
     def _score(
         self,
@@ -152,7 +248,11 @@ class _LabelScorerSupervised(_BaseScorer):
 
 
 class _LabelScorerUnsupervised(_BaseScorer):
-    """Scorer for clustering metrics that don't require ground truth."""
+    """Scorer for clustering metrics that don't require ground truth.
+
+    This scorer wraps metrics like ``silhouette_score`` that evaluate
+    clustering quality using only the data and predicted labels.
+    """
 
     def _score(
         self,
@@ -230,7 +330,16 @@ class _LabelScorerUnsupervised(_BaseScorer):
 
 
 class _MultimetricScorer:
-    """Scorer that wraps multiple scorers."""
+    """Scorer that wraps multiple scorers for multi-metric evaluation.
+
+    Parameters
+    ----------
+    scorers : dict
+        Dictionary mapping scorer names to scorer callables.
+    raise_exc : bool, default=True
+        If True, raise exceptions when scoring fails.
+        If False, set failed scores to NaN.
+    """
 
     def __init__(
         self, *, scorers: dict[str, Callable[..., float]], raise_exc: bool = True
@@ -241,6 +350,22 @@ class _MultimetricScorer:
     def __call__(
         self, estimator: BaseEstimator, *args: Any, **kwargs: Any
     ) -> dict[str, float]:
+        """Evaluate all scorers on the estimator.
+
+        Parameters
+        ----------
+        estimator : estimator object
+            Fitted estimator to score.
+        *args : Any
+            Positional arguments passed to each scorer.
+        **kwargs : Any
+            Keyword arguments passed to each scorer.
+
+        Returns
+        -------
+        scores : dict
+            Dictionary mapping scorer names to float scores.
+        """
         scores: dict[str, float] = {}
         for name, scorer in self._scorers.items():
             try:
@@ -353,12 +478,17 @@ def get_scorer(
     Parameters
     ----------
     scoring : str or callable
-        Scoring method as string. If callable it is returned as is.
+        Scoring method as string. If callable, it is returned as-is.
 
     Returns
     -------
     scorer : callable
-        The scorer.
+        The scorer callable with signature ``scorer(estimator, X, y)``.
+
+    Raises
+    ------
+    ValueError
+        If ``scoring`` is a string that is not a valid scorer name.
     """
     if isinstance(scoring, str):
         try:
@@ -408,8 +538,17 @@ def check_scoring(
     -------
     scoring : callable or _MultimetricScorer
         A scorer callable object / function with signature
-        ``scorer(estimator, X, y)``, or a _MultimetricScorer for
+        ``scorer(estimator, X, y)``, or a ``_MultimetricScorer`` for
         multi-metric scoring.
+
+    Raises
+    ------
+    TypeError
+        If the estimator does not implement ``fit``, or if ``scoring=None``
+        and the estimator does not implement ``score``.
+    ValueError
+        If ``scoring`` is a metric function instead of a scorer, or if
+        ``scoring`` is not a valid type.
     """
     if not hasattr(estimator, "fit"):
         raise TypeError(
@@ -476,6 +615,12 @@ def _check_multimetric_scoring(
     -------
     scorers_dict : dict
         A dict mapping each scorer name to its validated scorer.
+
+    Raises
+    ------
+    ValueError
+        If ``scoring`` is empty, contains duplicates, contains non-string
+        elements (for lists/tuples/sets), or is otherwise invalid.
     """
     err_msg_generic = (
         f"scoring is invalid (got {scoring!r}). Refer to the "
