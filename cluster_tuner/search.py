@@ -25,7 +25,7 @@ from sklearn.utils.metaestimators import available_if
 from sklearn.utils.validation import check_is_fitted
 
 
-from cluster_optimizer.scorer import (
+from cluster_tuner.scorer import (
     _get_labels,
     _noise_ratio,
     _smallest_clust_size,
@@ -1017,10 +1017,10 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         return results
 
 
-class ClusterOptimizer(BaseSearch):
+class ClusterTuner(BaseSearch):
     """Exhaustive search over specified parameter values for a clustering estimator.
 
-    ClusterOptimizer implements a `fit` and a `score` method. It attains the
+    ClusterTuner implements a `fit` and a `score` method. It attains the
     `labels_` attribute after optimizing hyperparameters if `refit=True`.
     It also implements "predict", "transform" and "inverse_transform"
     if they are implemented in the estimator used.
@@ -1087,7 +1087,7 @@ class ClusterOptimizer(BaseSearch):
 
         The refitted estimator is made available at the ``best_estimator_``
         attribute and permits using ``predict`` directly on this
-        ``ClusterOptimizer`` instance.
+        ``ClusterTuner`` instance.
 
     verbose : int
         Controls the verbosity: the higher, the more messages.

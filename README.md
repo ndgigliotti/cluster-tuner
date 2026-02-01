@@ -1,22 +1,22 @@
-# cluster-optimizer
+# cluster-tuner
+
+A GridSearchCV-like hyperparameter tuner for clustering algorithms.
 
 ## Installation
 
-You can install this package with pip using the following command:
-
-```
-pip install git+https://github.com/ndgigliotti/cluster-optimizer.git@main
+```bash
+pip install cluster-tuner
 ```
 
 ## Purpose
 
-This project provides a simple, Scikit-Learn-compatible, hyperparameter optimization tool for clustering. It's intended for situations where predicting clusters for new data points is a low priority. Many clustering algorithms in Scikit-Learn are **transductive**, meaning that they are not designed to be applied to new observations. Even if using an **inductive** clustering algorithm like K-Means, you might not have any desire to predict clusters for new observations. Or, even if you do have such a desire, prediction might be a lower priority than finding the best clusters in the data.
+This project provides a simple, Scikit-Learn-compatible, hyperparameter tuning tool for clustering. It's intended for situations where predicting clusters for new data points is a low priority. Many clustering algorithms in Scikit-Learn are **transductive**, meaning that they are not designed to be applied to new observations. Even if using an **inductive** clustering algorithm like K-Means, you might not have any desire to predict clusters for new observations. Or, even if you do have such a desire, prediction might be a lower priority than finding the best clusters in the data.
 
 Since Scikit-Learn's `GridSearchCV` uses cross-validation, and is designed to optimize inductive machine learning models, an alternative tool is necessary.
 
-## `ClusterOptimizer`
+## `ClusterTuner`
 
-The `ClusterOptimizer` class is a hyperparameter search tool for optimizing clustering algorithms. It simply fits one model per hyperparameter combination and selects the best. It's a spin-off of `GridSearchCV`, and the implementation is derived from Scikit-Learn. The only difference is that it doesn't use cross-validation and is designed to work with special clustering scorers. It's not always necessary to provide a target variable, since clustering metrics such as silhouette, Calinski-Harabasz, and Davies-Bouldin are designed for unsupervised clustering.
+The `ClusterTuner` class is a hyperparameter search tool for tuning clustering algorithms. It simply fits one model per hyperparameter combination and selects the best. It's a spin-off of `GridSearchCV`, and the implementation is derived from Scikit-Learn. The only difference is that it doesn't use cross-validation and is designed to work with special clustering scorers. It's not always necessary to provide a target variable, since clustering metrics such as silhouette, Calinski-Harabasz, and Davies-Bouldin are designed for unsupervised clustering.
 
 The interface is largely the same as `GridSearchCV`. Results are stored in the `results_` attribute (`cv_results_` also works as an alias for compatibility).
 
@@ -24,18 +24,18 @@ The interface is largely the same as `GridSearchCV`. Results are stored in the `
 
 ```python
 from sklearn.cluster import DBSCAN
-from cluster_optimizer import ClusterOptimizer
+from cluster_tuner import ClusterTuner
 
-optimizer = ClusterOptimizer(
+tuner = ClusterTuner(
     DBSCAN(),
     param_grid={'eps': [0.3, 0.5, 0.7], 'min_samples': [5, 10]},
     scoring='silhouette',
 )
-optimizer.fit(X)
+tuner.fit(X)
 
-print(optimizer.best_params_)
-print(optimizer.best_score_)
-labels = optimizer.labels_
+print(tuner.best_params_)
+print(tuner.best_score_)
+labels = tuner.labels_
 ```
 
 ### Key Parameters
@@ -50,23 +50,23 @@ These parameters help filter out degenerate clustering solutions where most poin
 You can evaluate multiple metrics simultaneously using a list, tuple, or dict:
 
 ```python
-optimizer = ClusterOptimizer(
+tuner = ClusterTuner(
     DBSCAN(),
     param_grid={'eps': [0.3, 0.5, 0.7]},
     scoring=['silhouette', 'calinski_harabasz', 'neg_davies_bouldin'],
     refit='silhouette',  # Required: which metric to use for selecting best
 )
-optimizer.fit(X)
+tuner.fit(X)
 
 # Results include all metrics
-print(optimizer.results_['silhouette'])
-print(optimizer.results_['calinski_harabasz'])
-print(optimizer.results_['neg_davies_bouldin'])
+print(tuner.results_['silhouette'])
+print(tuner.results_['calinski_harabasz'])
+print(tuner.results_['neg_davies_bouldin'])
 ```
 
 ## Transductive Clustering Scorers
 
-You can use `ClusterOptimizer` by passing the string name of a Scikit-Learn clustering metric, e.g. 'silhouette', 'calinski_harabasz', or 'rand_score' (the '_score' suffix is optional). You can also create a special scorer for transductive clustering using `scorer.make_scorer` on any score function with the signature `score_func(labels_true, labels_fit)` or `score_func(X, labels_fit)`.
+You can use `ClusterTuner` by passing the string name of a Scikit-Learn clustering metric, e.g. 'silhouette', 'calinski_harabasz', or 'rand_score' (the '_score' suffix is optional). You can also create a special scorer for transductive clustering using `scorer.make_scorer` on any score function with the signature `score_func(labels_true, labels_fit)` or `score_func(X, labels_fit)`.
 
 
 ### Recognized Scorer Names
@@ -103,15 +103,6 @@ The old name `'davies_bouldin'` still works for backwards compatibility but `'ne
 ### Comparing Clustering Algorithms
 
 It's important to consider your dataset and goals before comparing clustering algorithms in a grid search. Just because one algorithm gets a higher score than another does not necessarily make it a better choice. Different clustering algorithms have [different benefits, drawbacks, and use cases.](https://scikit-learn.org/stable/modules/clustering.html#overview-of-clustering-methods)
-
-## Future Work
-
-- [x] Write automated tests.
-- [x] Develop alternative to `BaseSearchCV`.
-- [x] Add multi-metric compatibility.
-- [x] Remove noise "cluster" and impose noise limit.
-- [x] Update docstrings taken from Scikit-Learn.
-- [ ] Add more search types (e.g. randomized).
 
 ## Credits
 

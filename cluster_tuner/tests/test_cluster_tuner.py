@@ -11,8 +11,8 @@ from sklearn.pipeline import make_pipeline, Pipeline
 from sklearn.utils.validation import check_is_fitted
 from sklearn.exceptions import NotFittedError
 
-from cluster_optimizer import ClusterOptimizer, make_scorer, SCORERS
-from cluster_optimizer.scorer import (
+from cluster_tuner import ClusterTuner, make_scorer, SCORERS
+from cluster_tuner.scorer import (
     _get_labels,
     _noise_ratio,
     _smallest_clust_size,
@@ -24,7 +24,7 @@ from cluster_optimizer.scorer import (
     check_multimetric_scoring,
     _passthrough_scorer,
 )
-from cluster_optimizer.search import (
+from cluster_tuner.search import (
     _check_fit_params,
     _check_param_grid,
     _aggregate_score_dicts,
@@ -685,13 +685,13 @@ class TestEstimatorHas:
 
     def test_unfitted_with_attribute(self):
         est = PredictableClusterer()
-        search = ClusterOptimizer(est, {"n_clusters": [2, 3]}, scoring="silhouette")
+        search = ClusterTuner(est, {"n_clusters": [2, 3]}, scoring="silhouette")
         check = _estimator_has("predict")
         assert check(search) is True
 
     def test_unfitted_without_attribute(self):
         est = cluster.DBSCAN()
-        search = ClusterOptimizer(est, {"eps": [0.5]}, scoring="silhouette")
+        search = ClusterTuner(est, {"eps": [0.5]}, scoring="silhouette")
         check = _estimator_has("predict")
         assert check(search) is False
 
@@ -839,18 +839,18 @@ class TestFitAndScore:
 
 
 # =============================================================================
-# ClusterOptimizer: Basic tests
+# ClusterTuner: Basic tests
 # =============================================================================
 
 
-class TestClusterOptimizerBasic:
-    """Basic tests for ClusterOptimizer."""
+class TestClusterTunerBasic:
+    """Basic tests for ClusterTuner."""
 
     @pytest.mark.filterwarnings("ignore:Estimator fit failed", "ignore:One or more")
     def test_fit_error(self):
         X, _ = datasets.make_blobs(n_samples=100, n_features=2, random_state=325)
         grid = {"eps": np.arange(0.25, 3.25, 0.25), "min_samples": [5, 20, 50]}
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             ErrorClusterer(), grid, scoring="silhouette", error_score=-1, refit=False
         )
         search.fit(X)
@@ -862,7 +862,7 @@ class TestClusterOptimizerBasic:
     def test_singular_metric(self):
         df, _ = datasets.load_iris(return_X_y=True, as_frame=True)
         grid = {"eps": np.arange(0.25, 3.25, 0.25), "min_samples": [5, 20, 50]}
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             cluster.DBSCAN(), grid, scoring="silhouette", error_score=-1
         )
         search.fit(df)
@@ -902,7 +902,7 @@ class TestClusterOptimizerBasic:
     def test_multi_metric(self):
         df, _ = datasets.load_iris(return_X_y=True, as_frame=True)
         grid = {"eps": np.arange(0.25, 3.25, 0.25), "min_samples": [5, 20, 50]}
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             cluster.DBSCAN(),
             grid,
             scoring=["silhouette", "calinski_harabasz", "davies_bouldin_score"],
@@ -969,7 +969,7 @@ class TestClusterOptimizerBasic:
             decomposition.TruncatedSVD(random_state=864),
             cluster.KMeans(random_state=6, n_init="auto"),
         )
-        search = ClusterOptimizer(pipe, grid, scoring="silhouette", error_score=-1)
+        search = ClusterTuner(pipe, grid, scoring="silhouette", error_score=-1)
         search.fit(text)
         check_is_fitted(
             search,
@@ -998,11 +998,11 @@ class TestClusterOptimizerBasic:
 
 
 # =============================================================================
-# ClusterOptimizer: Constraint tests
+# ClusterTuner: Constraint tests
 # =============================================================================
 
 
-class TestClusterOptimizerConstraints:
+class TestClusterTunerConstraints:
     """Tests for max_noise and min_cluster_size constraints."""
 
     @pytest.mark.filterwarnings("ignore:Noise ratio", "ignore:One or more")
@@ -1011,7 +1011,7 @@ class TestClusterOptimizerConstraints:
         X, _ = datasets.make_blobs(n_samples=100, centers=2, random_state=42)
         # DBSCAN with high eps will find few points, eps=0.1 will classify most as noise
         grid = {"eps": [0.1, 0.5, 1.0], "min_samples": [2]}
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             cluster.DBSCAN(),
             grid,
             scoring="silhouette",
@@ -1029,7 +1029,7 @@ class TestClusterOptimizerConstraints:
         X, _ = iris_data
         # Use a clusterer that might produce tiny clusters
         grid = {"n_clusters": [2, 3, 4, 5, 10, 20]}
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             cluster.KMeans(random_state=42, n_init="auto"),
             grid,
             scoring="silhouette",
@@ -1046,7 +1046,7 @@ class TestClusterOptimizerConstraints:
     def test_default_constraints(self, iris_data):
         """Default constraints should be max_noise=0.1 and min_cluster_size=3."""
         X, _ = iris_data
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             cluster.KMeans(n_clusters=3, n_init="auto"),
             {"n_clusters": [3]},
             scoring="silhouette",
@@ -1056,18 +1056,18 @@ class TestClusterOptimizerConstraints:
 
 
 # =============================================================================
-# ClusterOptimizer: Refit variants
+# ClusterTuner: Refit variants
 # =============================================================================
 
 
-class TestClusterOptimizerRefit:
+class TestClusterTunerRefit:
     """Tests for different refit options."""
 
     @pytest.mark.filterwarnings("ignore:Scoring failed", "ignore:Noise ratio")
     def test_refit_false(self, iris_data):
         X, _ = iris_data
         grid = {"eps": [0.5, 0.75, 1.0], "min_samples": [5, 10]}
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             cluster.DBSCAN(), grid, scoring="silhouette", refit=False, error_score=-1
         )
         search.fit(X)
@@ -1092,7 +1092,7 @@ class TestClusterOptimizerRefit:
             noise_ratios = np.where(np.isnan(noise_ratios), np.inf, noise_ratios)
             return np.argmin(noise_ratios)
 
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             cluster.DBSCAN(),
             grid,
             scoring="silhouette",
@@ -1111,7 +1111,7 @@ class TestClusterOptimizerRefit:
     def test_refit_string_multimetric(self, iris_data):
         X, _ = iris_data
         grid = {"eps": [0.5, 0.75], "min_samples": [5]}
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             cluster.DBSCAN(),
             grid,
             scoring=["silhouette", "calinski_harabasz"],
@@ -1125,17 +1125,17 @@ class TestClusterOptimizerRefit:
 
 
 # =============================================================================
-# ClusterOptimizer: Delegated methods
+# ClusterTuner: Delegated methods
 # =============================================================================
 
 
-class TestClusterOptimizerDelegatedMethods:
+class TestClusterTunerDelegatedMethods:
     """Tests for delegated methods like predict, transform."""
 
     def test_predict(self, iris_data):
         X, _ = iris_data
         grid = {"n_clusters": [3, 4]}
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             PredictableClusterer(),
             grid,
             scoring="silhouette",
@@ -1149,7 +1149,7 @@ class TestClusterOptimizerDelegatedMethods:
     def test_transform(self, iris_data):
         X, _ = iris_data
         grid = {"n_clusters": [3, 4]}
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             PredictableClusterer(),
             grid,
             scoring="silhouette",
@@ -1163,7 +1163,7 @@ class TestClusterOptimizerDelegatedMethods:
     def test_no_predict_without_refit(self, iris_data):
         X, _ = iris_data
         grid = {"n_clusters": [3]}
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             PredictableClusterer(),
             grid,
             scoring="silhouette",
@@ -1178,7 +1178,7 @@ class TestClusterOptimizerDelegatedMethods:
     def test_score_method(self, iris_data):
         X, _ = iris_data
         grid = {"n_clusters": [3]}
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             cluster.KMeans(random_state=42, n_init="auto"),
             grid,
             scoring="silhouette",
@@ -1189,17 +1189,17 @@ class TestClusterOptimizerDelegatedMethods:
 
 
 # =============================================================================
-# ClusterOptimizer: Supervised scorers
+# ClusterTuner: Supervised scorers
 # =============================================================================
 
 
-class TestClusterOptimizerSupervised:
+class TestClusterTunerSupervised:
     """Tests for supervised scoring with ground truth labels."""
 
     def test_adjusted_rand_with_y(self, iris_data):
         X, y = iris_data
         grid = {"n_clusters": [2, 3, 4]}
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             cluster.KMeans(random_state=42, n_init="auto"),
             grid,
             scoring="adjusted_rand",
@@ -1212,7 +1212,7 @@ class TestClusterOptimizerSupervised:
     def test_multi_supervised_metrics(self, iris_data):
         X, y = iris_data
         grid = {"n_clusters": [3]}
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             cluster.KMeans(random_state=42, n_init="auto"),
             grid,
             scoring=["adjusted_rand", "mutual_info", "homogeneity"],
@@ -1225,18 +1225,18 @@ class TestClusterOptimizerSupervised:
 
 
 # =============================================================================
-# ClusterOptimizer: Edge cases
+# ClusterTuner: Edge cases
 # =============================================================================
 
 
-class TestClusterOptimizerEdgeCases:
+class TestClusterTunerEdgeCases:
     """Edge case tests."""
 
     @pytest.mark.filterwarnings("ignore:Scoring failed", "ignore:One or more")
     def test_all_noise_clusterer(self, blob_data):
         X, _ = blob_data
         grid = {"dummy": [None]}  # Dummy parameter for AllNoiseClusterer
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             AllNoiseClusterer(),
             grid,
             scoring="silhouette",
@@ -1251,7 +1251,7 @@ class TestClusterOptimizerEdgeCases:
     def test_single_parameter_combination(self, iris_data):
         X, _ = iris_data
         grid = {"n_clusters": [3]}
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             cluster.KMeans(random_state=42, n_init="auto"),
             grid,
             scoring="silhouette",
@@ -1265,7 +1265,7 @@ class TestClusterOptimizerEdgeCases:
             {"n_clusters": [2, 3]},
             {"n_clusters": [4, 5]},
         ]
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             cluster.KMeans(random_state=42, n_init="auto"),
             grid,
             scoring="silhouette",
@@ -1277,7 +1277,7 @@ class TestClusterOptimizerEdgeCases:
         X, _ = iris_data
         X_df = pd.DataFrame(X, columns=["f1", "f2", "f3", "f4"])
         grid = {"n_clusters": [3]}
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             cluster.KMeans(random_state=42, n_init="auto"),
             grid,
             scoring="silhouette",
@@ -1287,17 +1287,17 @@ class TestClusterOptimizerEdgeCases:
 
 
 # =============================================================================
-# ClusterOptimizer: Parallelization
+# ClusterTuner: Parallelization
 # =============================================================================
 
 
-class TestClusterOptimizerParallel:
+class TestClusterTunerParallel:
     """Tests for parallel execution."""
 
     def test_n_jobs(self, iris_data):
         X, _ = iris_data
         grid = {"n_clusters": [2, 3, 4, 5]}
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             cluster.KMeans(random_state=42, n_init="auto"),
             grid,
             scoring="silhouette",
@@ -1309,7 +1309,7 @@ class TestClusterOptimizerParallel:
     def test_n_jobs_all(self, iris_data):
         X, _ = iris_data
         grid = {"n_clusters": [2, 3, 4]}
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             cluster.KMeans(random_state=42, n_init="auto"),
             grid,
             scoring="silhouette",
@@ -1320,17 +1320,17 @@ class TestClusterOptimizerParallel:
 
 
 # =============================================================================
-# ClusterOptimizer: sklearn compatibility
+# ClusterTuner: sklearn compatibility
 # =============================================================================
 
 
-class TestClusterOptimizerSklearnCompat:
+class TestClusterTunerSklearnCompat:
     """Tests for sklearn compatibility features."""
 
     def test_labels_property(self, iris_data):
         X, _ = iris_data
         grid = {"n_clusters": [3]}
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             cluster.KMeans(random_state=42, n_init="auto"),
             grid,
             scoring="silhouette",
@@ -1343,7 +1343,7 @@ class TestClusterOptimizerSklearnCompat:
     def test_n_features_in(self, iris_data):
         X, _ = iris_data
         grid = {"n_clusters": [3]}
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             cluster.KMeans(random_state=42, n_init="auto"),
             grid,
             scoring="silhouette",
@@ -1353,7 +1353,7 @@ class TestClusterOptimizerSklearnCompat:
 
     def test_n_features_in_not_fitted(self):
         grid = {"n_clusters": [3]}
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             cluster.KMeans(n_init="auto"),
             grid,
             scoring="silhouette",
@@ -1364,7 +1364,7 @@ class TestClusterOptimizerSklearnCompat:
     def test_estimator_type(self):
         grid = {"n_clusters": [3]}
         # Use a custom clusterer that explicitly has _estimator_type
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             PredictableClusterer(),
             grid,
             scoring="silhouette",
@@ -1375,7 +1375,7 @@ class TestClusterOptimizerSklearnCompat:
 
     def test_sklearn_tags(self):
         grid = {"n_clusters": [3]}
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             cluster.KMeans(n_init="auto"),
             grid,
             scoring="silhouette",
@@ -1385,17 +1385,17 @@ class TestClusterOptimizerSklearnCompat:
 
 
 # =============================================================================
-# ClusterOptimizer: Verbose output
+# ClusterTuner: Verbose output
 # =============================================================================
 
 
-class TestClusterOptimizerVerbose:
+class TestClusterTunerVerbose:
     """Tests for verbose output."""
 
     def test_verbose_output(self, iris_data, capsys):
         X, _ = iris_data
         grid = {"n_clusters": [3]}
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             cluster.KMeans(random_state=42, n_init="auto"),
             grid,
             scoring="silhouette",
@@ -1407,17 +1407,17 @@ class TestClusterOptimizerVerbose:
 
 
 # =============================================================================
-# ClusterOptimizer: Error handling
+# ClusterTuner: Error handling
 # =============================================================================
 
 
-class TestClusterOptimizerErrors:
+class TestClusterTunerErrors:
     """Tests for error handling."""
 
     def test_error_score_raise(self, iris_data):
         X, _ = iris_data
         grid = {"eps": [0.5]}
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             ErrorClusterer(),
             grid,
             scoring="silhouette",
@@ -1429,7 +1429,7 @@ class TestClusterOptimizerErrors:
     def test_invalid_error_score(self, iris_data):
         X, _ = iris_data
         grid = {"n_clusters": [3]}
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             cluster.KMeans(n_init="auto"),
             grid,
             scoring="silhouette",
@@ -1441,7 +1441,7 @@ class TestClusterOptimizerErrors:
     def test_invalid_refit_multimetric(self, iris_data):
         X, _ = iris_data
         grid = {"n_clusters": [3]}
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             cluster.KMeans(random_state=42, n_init="auto"),
             grid,
             scoring=["silhouette", "calinski_harabasz"],
@@ -1452,7 +1452,7 @@ class TestClusterOptimizerErrors:
 
     def test_empty_param_grid(self):
         with pytest.raises(ValueError):
-            ClusterOptimizer(
+            ClusterTuner(
                 cluster.KMeans(n_init="auto"),
                 {"n_clusters": []},
                 scoring="silhouette",
@@ -1475,7 +1475,7 @@ class TestIntegration:
             "eps": np.arange(0.3, 1.0, 0.1),
             "min_samples": [3, 5, 10],
         }
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             cluster.DBSCAN(),
             grid,
             scoring=["silhouette", "adjusted_rand"],
@@ -1507,7 +1507,7 @@ class TestIntegration:
         """Complete workflow with KMeans."""
         X, y = iris_data
         grid = {"n_clusters": [2, 3, 4, 5]}
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             cluster.KMeans(random_state=42, n_init="auto"),
             grid,
             scoring="silhouette",
@@ -1537,7 +1537,7 @@ class TestIntegration:
             "dbscan__eps": [0.3, 0.5, 0.7],
             "dbscan__min_samples": [3, 5],
         }
-        search = ClusterOptimizer(
+        search = ClusterTuner(
             pipe,
             grid,
             scoring="silhouette",

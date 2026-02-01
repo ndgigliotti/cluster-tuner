@@ -3,11 +3,11 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cluster_optimizer"
+name = "cluster-tuner"
 version = "0.1.0"
-description = "A GridSearchCV-like hyperparameter optimizer for clustering (no cross-validation)."
+description = "A GridSearchCV-like hyperparameter tuner for clustering algorithms."
 readme = "README.md"
-license = {text = "MIT"}
+license = {text = "BSD-3-Clause"}
 authors = [
     {name = "nick_gigliotti", email = "ndgigliotti@gmail.com"}
 ]
@@ -15,7 +15,7 @@ requires-python = ">=3.10"
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: BSD License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
@@ -23,8 +23,9 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
 ]
-keywords = ["clustering", "hyperparameter", "optimization", "scikit-learn", "machine-learning"]
+keywords = ["clustering", "hyperparameter", "tuning", "scikit-learn", "machine-learning"]
 dependencies = [
     "scikit-learn>=1.6",
     "numpy>=1.23",
@@ -35,21 +36,48 @@ dependencies = [
 [project.optional-dependencies]
 test = [
     "pytest>=7.0",
+    "pytest-cov>=4.0",
     "pandas>=2.0",
 ]
 dev = [
     "pytest>=7.0",
+    "pytest-cov>=4.0",
     "pandas>=2.0",
     "mypy>=1.0",
+    "ruff>=0.4",
+    "pre-commit>=3.0",
 ]
 
 [project.urls]
-Homepage = "https://github.com/ndgigliotti/cluster-optimizer"
-Repository = "https://github.com/ndgigliotti/cluster-optimizer"
+Homepage = "https://github.com/ndgigliotti/cluster-tuner"
+Repository = "https://github.com/ndgigliotti/cluster-tuner"
+Issues = "https://github.com/ndgigliotti/cluster-tuner/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["cluster_optimizer*"]
+include = ["cluster_tuner*"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+exclude = [
+    ".git",
+    "__pycache__",
+    "dist",
+    "build",
+    ".venv",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = [
+    "E203",  # whitespace before ':'
+    "E731",  # do not assign a lambda expression
+    "E741",  # ambiguous variable name
+]
+
+[tool.ruff.lint.per-file-ignores]
+"examples/*" = ["E402"]
 
 [tool.mypy]
 python_version = "3.10"
@@ -58,4 +86,15 @@ warn_unused_configs = true
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-testpaths = ["tests.py"]
+testpaths = ["cluster_tuner/tests"]
+addopts = "--doctest-modules --color=yes"
+
+[tool.coverage.run]
+source = ["cluster_tuner"]
+omit = ["cluster_tuner/tests/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+]
