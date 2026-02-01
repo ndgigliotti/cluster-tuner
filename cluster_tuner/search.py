@@ -9,7 +9,7 @@ from collections.abc import Callable, Sequence
 from contextlib import suppress
 from functools import partial
 from traceback import format_exc
-from typing import Any, Literal
+from typing import Any, Literal, TYPE_CHECKING, cast
 
 import joblib
 import numpy as np
@@ -538,6 +538,17 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         "error_score": [StrOptions({"raise"}), numbers.Real],
     }
 
+    # Attributes set during fit()
+    best_estimator_: BaseEstimator
+    results_: dict[str, Any]
+    scorer_: Callable[..., float] | dict[str, Callable[..., float]]
+    best_index_: int
+    best_params_: dict[str, Any]
+    best_score_: float
+    multimetric_: bool
+    n_splits_: int
+    feature_names_in_: NDArray[np.str_]
+
     @abstractmethod
     def __init__(
         self,
@@ -607,16 +618,20 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
             )
         if isinstance(self.scorer_, dict):
             if self.multimetric_:
-                scorer = self.scorer_[self.refit]
+                scorer = self.scorer_[cast(str, self.refit)]
             else:
-                scorer = self.scorer_
-            return scorer(self.best_estimator_, X, y)
+                scorer = cast(Callable[..., float], self.scorer_)
+            result = scorer(self.best_estimator_, X, y)
+            if isinstance(result, dict):
+                return float(result[cast(str, self.refit)])
+            return float(result)
 
         # callable
-        score = self.scorer_(self.best_estimator_, X, y)
+        scorer_fn = cast(Callable[..., Any], self.scorer_)
+        score = scorer_fn(self.best_estimator_, X, y)
         if self.multimetric_:
-            score = score[self.refit]
-        return score
+            score = score[cast(str, self.refit)]
+        return float(score)
 
     @available_if(_estimator_has("score_samples"))
     def score_samples(self, X: ArrayLike) -> NDArray[Any]:
@@ -639,7 +654,7 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
             Scores for each sample.
         """
         self._check_is_fitted("score_samples")
-        return self.best_estimator_.score_samples(X)
+        return cast(NDArray[Any], self.best_estimator_.score_samples(X))
 
     def _check_is_fitted(self, method_name: str) -> None:
         """Check if the search estimator is fitted.
@@ -684,7 +699,7 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
             Predicted labels or values.
         """
         self._check_is_fitted("predict")
-        return self.best_estimator_.predict(X)
+        return cast(NDArray[Any], self.best_estimator_.predict(X))
 
     @available_if(_estimator_has("predict_proba"))
     def predict_proba(self, X: ArrayLike) -> NDArray[Any]:
@@ -705,7 +720,7 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
             Predicted class probabilities.
         """
         self._check_is_fitted("predict_proba")
-        return self.best_estimator_.predict_proba(X)
+        return cast(NDArray[Any], self.best_estimator_.predict_proba(X))
 
     @available_if(_estimator_has("predict_log_proba"))
     def predict_log_proba(self, X: ArrayLike) -> NDArray[Any]:
@@ -726,7 +741,7 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
             Predicted class log-probabilities.
         """
         self._check_is_fitted("predict_log_proba")
-        return self.best_estimator_.predict_log_proba(X)
+        return cast(NDArray[Any], self.best_estimator_.predict_log_proba(X))
 
     @available_if(_estimator_has("decision_function"))
     def decision_function(self, X: ArrayLike) -> NDArray[Any]:
@@ -747,7 +762,7 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
             Decision function values.
         """
         self._check_is_fitted("decision_function")
-        return self.best_estimator_.decision_function(X)
+        return cast(NDArray[Any], self.best_estimator_.decision_function(X))
 
     @available_if(_estimator_has("transform"))
     def transform(self, X: ArrayLike) -> NDArray[Any]:
@@ -768,7 +783,7 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
             Transformed data.
         """
         self._check_is_fitted("transform")
-        return self.best_estimator_.transform(X)
+        return cast(NDArray[Any], self.best_estimator_.transform(X))
 
     @available_if(_estimator_has("inverse_transform"))
     def inverse_transform(self, X: ArrayLike) -> NDArray[Any]:
@@ -789,7 +804,7 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
             Data in the original feature space.
         """
         self._check_is_fitted("inverse_transform")
-        return self.best_estimator_.inverse_transform(X)
+        return cast(NDArray[Any], self.best_estimator_.inverse_transform(X))
 
     @property
     def n_features_in_(self) -> int:
@@ -802,12 +817,12 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
                 f"{self.__class__.__name__} object has no n_features_in_ attribute."
             ) from nfe
 
-        return self.best_estimator_.n_features_in_
+        return cast(int, self.best_estimator_.n_features_in_)
 
     @property
     def classes_(self) -> NDArray[Any]:
         self._check_is_fitted("classes_")
-        return self.best_estimator_.classes_
+        return cast(NDArray[Any], self.best_estimator_.classes_)
 
     @property
     def cv_results_(self) -> dict[str, Any]:
@@ -962,12 +977,12 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
         refit_metric = "test_score"
 
         if callable(self.scoring):
-            scorers = self.scoring
+            scorers: Callable[..., float] | dict[str, Callable[..., float]] | _MultimetricScorer = self.scoring
         elif self.scoring is None or isinstance(self.scoring, str):
             scorers = check_scoring(self.estimator, self.scoring)
         else:
             scorers = _check_multimetric_scoring(self.estimator, self.scoring)
-            self._check_refit_for_multimetric(scorers)
+            self._check_refit_for_multimetric(cast(dict[str, Callable[..., float]], scorers))
             refit_metric = f"test_{self.refit}"
 
         # Handle _MultimetricScorer
@@ -1118,7 +1133,7 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
             suitable for conversion to a pandas DataFrame.
         """
         n_candidates = len(candidate_params)
-        out = _aggregate_score_dicts(out)
+        out_dict: dict[str, Any] = _aggregate_score_dicts(out)
 
         results = dict(more_results or {})
 
@@ -1141,14 +1156,14 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
                     rankdata(-array, method="min"), dtype=np.int32
                 )
 
-        _store("noise_ratio", out["noise_ratio"])
-        _store("smallest_clust_size", out["smallest_clust_size"])
-        _store("fit_time", out["fit_time"])
-        _store("score_time", out["score_time"])
+        _store("noise_ratio", out_dict["noise_ratio"])
+        _store("smallest_clust_size", out_dict["smallest_clust_size"])
+        _store("fit_time", out_dict["fit_time"])
+        _store("score_time", out_dict["score_time"])
         # Use one MaskedArray and mask all the places where the param is not
         # applicable for that candidate. Use defaultdict as each candidate may
         # not contain all the params
-        param_results = defaultdict(
+        param_results: defaultdict[str, MaskedArray[Any, Any]] = defaultdict(
             partial(
                 MaskedArray,
                 np.empty(
@@ -1165,11 +1180,11 @@ class BaseSearch(MetaEstimatorMixin, BaseEstimator, metaclass=ABCMeta):
                 # Setting the value at an index also unmasks that index
                 param_results[f"param_{name}"][cand_idx] = value
 
-        results.update(param_results)
+        results.update(cast(dict[str, Any], param_results))
         # Store a list of param dicts at the key 'params'
         results["params"] = candidate_params
 
-        scores_dict = _normalize_score_results(out["scores"])
+        scores_dict = _normalize_score_results(out_dict["scores"])
 
         for scorer_name in scores_dict:
             _store(
